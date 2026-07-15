@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual environments
+venv/
+ENV/
+env/
+.venv
+.venv-team-management/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Testing
+.coverage
+.pytest_cache/
+.tox/
+htmlcov/
+
+# Documentation builds
+docs/_build/
+docs/.doctrees
+
+# Temporary files
+*.tmp
+.tmp/
+tmp/
+/.mcp.json
+
+# Local runtime state — not part of the published plugin source
+/.claude/
+/team-management/
+wiki/.obsidian/

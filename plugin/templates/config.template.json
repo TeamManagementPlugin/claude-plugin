@@ -1,0 +1,125 @@
+{
+  "developer_name": "Your Name",
+  "project_name": "",
+  "_comment_project_name": "Optional label shown in the statusline (between open-tasks and MCP). Leave empty to fall back to the project folder name.",
+  "protocol_engine": {
+    "enabled": true
+  },
+  "ai_providers": {
+    "enabled_providers": [],
+    "include_in_code_review": true,
+    "include_in_brainstorm": true,
+    "include_in_investigation": true,
+    "include_in_implementation": true,
+    "include_in_research_exploration": true,
+    "include_in_refactoring_planning": true,
+    "timeout": 300
+  },
+  "_comment_ai_providers": "AI provider integration for multi-model analysis. Providers run as parallel Task agents (no MCP bridge). 6 per-phase flags gate participation: code_review, brainstorm, investigation, implementation, research_exploration, refactoring_planning. Available providers: codex (OpenAI Codex CLI), agy (Google Antigravity CLI). timeout is currently INERT — the wrappers enforce a fixed deadline (codex 300s, agy 330s watchdog) and do not read this key; it is kept for a future plumbing task. Legacy keys `include_in_architecture` and `include_in_exploration` are deprecated, and the retired `gemini` provider was replaced by `agy` — values are NOT auto-forwarded; session-start emits a one-time warning when they appear here.",
+  "codex": {
+    "enabled": false
+  },
+  "agy": {
+    "enabled": false
+  },
+  "_comment_agy": "Google Antigravity CLI (agy) provider. Runs `agy --sandbox --print-timeout 300s -p ...` — the OS sandbox blocks shell writes; the wrapper detects and reports file mutations via a git-status check. The framework does not override model selection — agy uses its CLI-default model (change via `agy --model <name>` or the agy /settings UI). Requires: Antigravity CLI installed and authenticated (run `agy` once to sign in).",
+  "blocked_tools": [
+    "Edit",
+    "Write",
+    "MultiEdit",
+    "NotebookEdit"
+  ],
+  "_comment_read_only_bash_commands": "Optional top-level array overriding which Bash commands are allowed in discussion mode (whole-word / prefix match, e.g. 'ls', 'git status', 'grep'). Omitted here so the built-in default allowlist (in sessions-enforce.py DEFAULT_CONFIG) applies; add the key only to customize. HAND-EDIT ONLY: this key is not settable via /team-management:config (it is absent from config_update's schema) — edit it directly in this file.",
+  "task_detection": {
+    "enabled": true
+  },
+  "branch_enforcement": {
+    "enabled": true,
+    "branch_prefixes": {
+      "implement-": "feature/",
+      "fix-": "fix/",
+      "refactor-": "feature/",
+      "migrate-": "feature/",
+      "test-": "feature/",
+      "docs-": "feature/",
+      "o-": "optimize/",
+      "b-": "brainstorm/"
+    }
+  },
+  "_comment_branch_prefixes": "Task-prefix → branch-prefix mapping consulted by the branch-enforcement hook. Override here to customise; the engine falls back to the built-in defaults (defined in sessions-enforce.py DEFAULT_CONFIG) if `branch_enforcement.branch_prefixes` is omitted. The `o-` → `optimize/` mapping is required for the optimize / optimize-unattended protocols. The `b-` → `brainstorm/` mapping is required for the brainstorm protocol.",
+  "api_mode": false,
+  "features": {
+    "icon_style": "ascii"
+  },
+  "_comment_features": "Icon styles: 'nerd_fonts' (default on macOS/Linux), 'emoji', 'ascii' (default on Windows)",
+  "code_review": {
+    "enforce_warnings": false
+  },
+  "_comment_code_review": "enforce_warnings: When true, code review warnings must be acknowledged before task completion (default: false)",
+  "test_command": null,
+  "_comment_test_command": "Optional. Command the code-review step runs to verify tests before advancing. Safe-by-design: must start with one of the allowlisted prefixes (pytest / npm test / cargo test / go test / rspec / rake test / python -m pytest / python -m unittest / python3 -m pytest / python3 -m unittest / jest) AND contain none of the forbidden shell metacharacters (; && || | ` $( > <). Runs with shell=False from the project root. Set to null to skip the gate.",
+  "notifications": {
+    "enabled": false,
+    "mode": "per_step",
+    "prefix": "my-project",
+    "channels": {
+      "telegram": {
+        "enabled": false,
+        "bot_token": "",
+        "chat_id": "",
+        "ca_bundle": ""
+      }
+    }
+  },
+  "_comment_notifications": "Notifications: get alerted when protocols advance or AI needs your response. Channels: telegram. mode: 'per_step' pings on every protocol step (default); 'off' silences per-step pings but still delivers the protocol-completion ping. A missing 'mode' key defaults to 'per_step'. ca_bundle: optional path to a CA bundle (PEM) for verifying api.telegram.org — leave empty unless TLS verification fails (empty Python CA store or a TLS-inspecting proxy); env SSL_CERT_FILE / REQUESTS_CA_BUNDLE are also honored.",
+  "auto_compact": {
+    "enabled": true,
+    "threshold": 85,
+    "context_limit": null
+  },
+  "_comment_auto_compact": "Auto-compact: triggers context compaction protocol at threshold% token usage. context_limit: OPTIONAL explicit override of the model's context-window budget in tokens (e.g. 1000000 for 1M, 200000 for 200k). Leave null to auto-detect from the model name — a hardcoded value on a smaller model would make the threshold unreachable.",
+  "wiki": {
+    "enabled": false
+  },
+  "_comment_wiki": "LLM Wiki: a persistent, compounding knowledge base Claude maintains under wiki/. Enable via /team-management:config (which also offers to seed wiki/). Default false.",
+  "_comment_provider_tokens": "Provider API tokens are NOT stored in this file. They live in a per-project, user-authored .claude/state/provider-tokens.json (git-ignored, chmod 0600, keyed by provider name: gitlab/jira/github/telegram). Leave the api_token fields below empty; a token already present here from a legacy install still works as a fallback.",
+  "issue_tracking": {
+    "provider": "disabled",
+    "auto_sync": true
+  },
+  "gitlab": {
+    "enabled": false,
+    "api_token": "",
+    "issue_tracking_enabled": true,
+    "base_url": "https://gitlab.com",
+    "project_path": "namespace/project-name",
+    "auto_sync": true,
+    "default_labels": ["claude-code", "automated"]
+  },
+  "jira": {
+    "enabled": false,
+    "api_version": "2",
+    "api_token": "",
+    "issue_tracking_enabled": true,
+    "base_url": "https://your-jira-instance.com",
+    "project_key": "PROJ",
+    "auto_sync": true,
+    "default_issue_type": "Task",
+    "supported_issue_types": ["Bug", "Epic", "Story", "Sub-task", "Task"]
+  },
+  "github": {
+    "enabled": false,
+    "api_token": "",
+    "issue_tracking_enabled": true,
+    "base_url": "https://api.github.com",
+    "repository": "owner/repo-name",
+    "auto_sync": true,
+    "default_labels": ["claude-code", "automated"],
+    "workflow_labels": {
+      "in_progress": "in-progress",
+      "blocked": "blocked",
+      "pending": "pending"
+    }
+  },
+  "_comment_optimize_frontmatter": "Optimize-protocol task frontmatter schema (engine-managed; do not edit by hand): optimize.best_commit, optimize.best_metric, optimize.baseline_commit, optimize.baseline_metric, optimize.baseline_wall_clock_s, optimize.runs_per_iteration, optimize.aggregator, optimize.experimentation_started_at. Written by `_func_capture_metric_baseline`, `_func_update_best_commit`, and `_handle_loop_iteration` in protocol_engine.py."
+}

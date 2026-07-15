@@ -1,0 +1,16 @@
+{
+  "name": "team-management",
+  "owner": { "name": "Team Management" },
+  "metadata": {
+    "description": "Marketplace for the team-management Claude Code plugin.",
+    "version": "0.4.2"
+  },
+  "plugins": [
+    {
+      "name": "team-management",
+      "source": "./plugin",
+      "description": "Enforced DAIC methodology for AI pair programming: discussion-before-implementation hooks, a JSON-driven protocol engine, persistent task management, and multi-provider issue tracking.",
+      "license": "MIT"
+    }
+  ]
+}

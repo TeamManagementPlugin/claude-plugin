@@ -1,0 +1,64 @@
+{
+    "name": "refactoring",
+    "description": "Refactoring workflow with test safety: capture test baseline, plan, incremental refactoring with verification, regression testing, code review, and completion.",
+    "steps": [
+        {
+            "name": "test-baseline",
+            "description": "Run tests on default branch, capture baseline snapshot before any changes",
+            "mode": "discussion",
+            "pre_funcs": ["auto_detect_task"],
+            "post_funcs": ["capture_test_baseline"],
+            "post_funcs_stop_on_failure": true,
+            "advance_args": ["test_command", "baseline_summary"],
+            "start": "Capture the test baseline BEFORE any refactoring work. This must run on the default branch (main/master) to establish the true starting point.\n\n1. Identify the project's test command (e.g., pytest -v, npm test, go test ./..., cargo test).\n2. Run the test suite and record the results.\n3. Note: pre-existing failures are acceptable — they will be tracked in the baseline so they aren't confused with regressions later.\n4. If there is NO test suite: consider whether tests should be written first. If the refactoring is safe without tests, pass test_command=\"none\" and baseline_summary=\"No test suite found\".\n\nWhen the test run is complete, call protocol_advance with args:\n{\"test_command\": \"<the exact command>\", \"baseline_summary\": \"<e.g. 47 passed, 0 failed, 2 skipped>\"}",
+            "end": "Test baseline captured. You have the exact test command and a summary of results (passes, failures, skips). Pass args: {\"test_command\": \"<command>\", \"baseline_summary\": \"<summary>\"} to protocol_advance."
+        },
+        {
+            "name": "planning",
+            "description": "Define refactoring scope, create task, setup branch",
+            "mode": "discussion",
+            "pre_funcs": ["resolve_ai_providers_for_refactoring_planning"],
+            "post_funcs": ["git_setup_branch", "create_task_file", "set_task_state", "create_issue_if_enabled", "update_task_status_in_progress"],
+            "post_funcs_stop_on_failure": true,
+            "advance_args": ["task", "branch", "task_content"],
+            "start": "@sub-protocols/refactoring-planning.md",
+            "end": "Refactoring scope is defined with clear success criteria. User has explicitly approved the plan. Task file content composed following TEMPLATE.md format. Pass args: {\"task\": \"<priority>-refactor-<name>\", \"branch\": \"feature/<name>\", \"task_content\": \"<full markdown>\"} to protocol_advance."
+        },
+        {
+            "name": "refactoring",
+            "description": "Incremental refactoring with mandatory inter-increment testing",
+            "mode": "implementation",
+            "pre_funcs": ["verify_branch_and_task"],
+            "start": "@sub-protocols/refactoring-incremental.md",
+            "end": "All refactoring changes are complete. Each increment was tested and passed. Success criteria from the task file are checked off. Ready for full regression verification."
+        },
+        {
+            "name": "test-verify",
+            "description": "Final regression verification against baseline",
+            "mode": "discussion",
+            "pre_funcs": ["load_test_baseline"],
+            "start": "@sub-protocols/refactoring-verify.md",
+            "end": "All previously-passing tests still pass. No regressions introduced. Verification results summarized for the user. If regressions were found, they have been fixed (via protocol_goto to refactoring step) and re-verified."
+        },
+        {
+            "name": "code-review",
+            "description": "Spec compliance review + code quality review. Sentinel SPEC_REVIEW: PASSED required before advance. Summary must evidence verification. verify_tests_pass deliberately omitted: the refactoring protocol tolerates pre-existing baseline failures (test-verify step diffs against the baseline), while verify_tests_pass requires exit 0 and would permanently block dirty-baseline codebases.",
+            "mode": "implementation",
+            "pre_funcs": ["resolve_ai_providers", "require_spec_review_passed"],
+            "post_funcs": ["require_spec_review_passed", "check_completion_evidence", "validate_code_review_in_worklog", "validate_no_critical_issues_in_worklog"],
+            "post_funcs_stop_on_failure": true,
+            "start": "@sub-protocols/code-review.md",
+            "end": "Code review passes with zero critical issues. If warning enforcement is strict (enforce_warnings=true), zero warnings required — fix all warnings and re-review until clean. If relaxed (enforce_warnings=false or not set), warnings are documented but do not block. Final passing review results are appended to the task work log in the exact format: '# Code Review: [Title]' with Summary, Critical Issues, Warnings, and Notes sections."
+        },
+        {
+            "name": "completion",
+            "description": "User tests changes, confirms, then dispatcher runs the provider-driven chain or the 4-option menu flow when issue tracking is disabled.",
+            "mode": "discussion",
+            "pre_funcs": ["present_completion_options"],
+            "post_funcs": ["require_discard_confirmation", "completion_dispatch", "cleanup_test_baseline"],
+            "post_funcs_stop_on_failure": true,
+            "start": "@sub-protocols/task-completion.md",
+            "end": "User has tested the changes and explicitly confirmed everything works correctly. Upon calling protocol_advance, the engine automatically handles: committing and pushing changes, creating MR/PR (if provider enabled), updating issue status, archiving task file, cleaning up test baseline and task-scoped state, and clearing task state. When issue_tracking.provider is 'disabled', the user picks a completion_option from the menu presented on step entry (merge_local / push_pr / keep / discard)."
+        }
+    ]
+}

@@ -1,0 +1,49 @@
+{
+    "name": "brainstorm",
+    "description": "Brainstorm workflow: topic definition, deep discussion, multi-perspective analysis with 6 parallel specialists, conflict resolution loop, structured results document, and implementation task planning.",
+    "steps": [
+        {
+            "name": "topic",
+            "description": "Define brainstorm topic, create branch and task file",
+            "mode": "documentation",
+            "pre_funcs": ["auto_detect_task"],
+            "post_funcs": ["git_setup_branch", "create_task_file", "set_task_state", "create_issue_if_enabled", "update_task_status_in_progress"],
+            "post_funcs_stop_on_failure": true,
+            "advance_args": ["task", "branch", "task_content"],
+            "start": "@sub-protocols/brainstorm-topic.md",
+            "end": "Topic is clearly defined with initial scope. You have composed the complete brainstorm task file content with frontmatter (task: b-brainstorm-<name>, branch: brainstorm/<name>) and all required sections. Pass args: {\"task\": \"b-brainstorm-<name>\", \"branch\": \"brainstorm/<name>\", \"task_content\": \"<full markdown>\"} to protocol_advance."
+        },
+        {
+            "name": "discussion",
+            "description": "Deep discussion recording decisions, also serves as conflict resolution step",
+            "mode": "documentation",
+            "start": "@sub-protocols/brainstorm-discussion.md",
+            "end": "All open questions and conflicts are resolved. Every decision is recorded in the task file's ## Decisions section with checkboxes. The user confirms readiness to proceed to multi-perspective analysis. If returning from analysis with conflicts, all conflicts have been resolved and decisions updated."
+        },
+        {
+            "name": "analysis",
+            "description": "Multi-perspective analysis with 6 parallel specialist subagents",
+            "mode": "documentation",
+            "pre_funcs": ["resolve_ai_providers_for_brainstorm"],
+            "start": "@sub-protocols/brainstorm-analysis.md",
+            "end": "After agents complete: document results in ## Expert Analysis sections. If conflicts exist between experts, document in ## Conflicts and call protocol_goto(step_name=\"discussion\"). If no conflicts, all sections are freshly populated and you may advance to results."
+        },
+        {
+            "name": "results",
+            "description": "Generate results document and get user approval",
+            "mode": "documentation",
+            "start": "@sub-protocols/brainstorm-results.md",
+            "end": "Results document is written to docs/brainstorm-results/<name>.md with all required sections. You presented 3 task granularity options (minimal/balanced/fine-grained) with concrete task lists, user chose one, and the Implementation Plan section is added to the results document. User has reviewed and approved the complete document. If changes needed, use protocol_goto to go back. Ready to proceed to task creation."
+        },
+        {
+            "name": "planning",
+            "description": "Plan implementation tasks, confirm, then dispatcher runs the provider-driven chain or the 4-option menu flow when issue tracking is disabled.",
+            "mode": "documentation",
+            "pre_funcs": ["present_completion_options"],
+            "post_funcs": ["require_discard_confirmation", "completion_dispatch"],
+            "post_funcs_stop_on_failure": true,
+            "start": "@sub-protocols/brainstorm-planning.md",
+            "end": "Task files are created per the approved Implementation Plan from the results step. The Section 2 coverage audit is complete — every recorded decision, feature detail, in-scope item, and dead-code entry maps to a created task or an explicit waiver — and the ## Task Coverage matrix is written to the results document. User has confirmed both the created tasks and the coverage. Upon calling protocol_advance, the engine automatically handles completion. When issue_tracking.provider is 'disabled', the user picks a completion_option from the menu presented on step entry (merge_local / push_pr / keep / discard). Pass args: {\"completion_option\": \"<option>\"} when provider is disabled."
+        }
+    ]
+}

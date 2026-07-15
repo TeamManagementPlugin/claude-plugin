@@ -1,0 +1,77 @@
+{
+    "name": "optimize",
+    "description": "Iterative metric-driven optimization with interactive batched experimentation. setup → metric-script validation → baseline (cost projection) → batched experimentation loop with discussion checkpoints between batches → synthesis → code-review → completion (squash from optimize.best_commit, MR/PR with leaderboard).\n\nExample: protocol_start(protocol_name=\"optimize\") to tune a Python hot loop's wall-clock runtime metric — discussion checkpoints after each batch let you steer or abort.",
+    "steps": [
+        {
+            "name": "setup",
+            "description": "Interactive metric elicitation; persists settings to optimize-state.json; auto-creates task file + branch + issue",
+            "mode": "discussion",
+            "pre_funcs": ["auto_detect_task"],
+            "post_funcs": ["validate_optimize_setup", "git_setup_branch", "create_task_file", "set_task_state", "create_issue_if_enabled", "update_task_status_in_progress", "write_optimize_setup"],
+            "post_funcs_stop_on_failure": true,
+            "advance_args": ["task", "branch", "task_content", "metric_command", "metric_parser", "metric_direction", "metric_monotonic"],
+            "start": "@sub-protocols/optimize-setup.md",
+            "end": "User has approved metric definition, scope, batch size, and termination conditions. Task file is composed and optimize-state.json fields are populated. Pass args including required {metric_command, metric_parser, metric_direction, metric_monotonic, task, branch, task_content} plus any optional overrides to protocol_advance."
+        },
+        {
+            "name": "metric-script",
+            "description": "Author/refine the measurement script; validate via double-run stability gate",
+            "mode": "implementation",
+            "pre_funcs": ["verify_branch_and_task"],
+            "post_funcs": ["validate_metric_script"],
+            "post_funcs_stop_on_failure": true,
+            "start": "@sub-protocols/optimize-metric-script.md",
+            "end": "Metric script exists, runs cleanly, parser yields a float, and two consecutive runs are within stability_threshold_pct (default 5%). If the validator fails, fix the script and call protocol_advance again — the validator re-runs from this step's post_funcs."
+        },
+        {
+            "name": "baseline",
+            "description": "Capture baseline metric on HEAD; project total cost from real timing",
+            "mode": "implementation",
+            "pre_funcs": ["verify_branch_and_task"],
+            "post_funcs": ["capture_metric_baseline", "check_cost_estimate"],
+            "post_funcs_stop_on_failure": true,
+            "start": "@sub-protocols/optimize-baseline.md",
+            "end": "Baseline metric captured; baseline_wall_clock_s and optimize.baseline_commit recorded. Cost projection presented to user. If both max_iterations and max_duration are null (unbounded mode), include args[\"unbounded_acknowledged\"]=\"i-accept-unbounded-cost\" in the next protocol_advance."
+        },
+        {
+            "name": "experimentation",
+            "description": "Batched hypothesis loop: each iteration commits one hypothesis, runs the metric, logs a TSV row; checkpoints fire at batch boundaries",
+            "mode": "implementation",
+            "pre_funcs": ["verify_branch_and_task"],
+            "looping_step": true,
+            "post_funcs": ["log_experiment_result", "update_best_commit", "check_termination", "batch_checkpoint"],
+            "post_funcs_stop_on_failure": true,
+            "start": "@sub-protocols/optimize-experimentation-batch.md",
+            "end": "Experimentation terminates either by check_termination (max_iterations / max_duration / regression_halt / target_reached) or by user passing args[\"exit_loop\"]=true at a batch boundary. optimize.best_commit and optimize.best_metric are recorded in task frontmatter for the synthesis and completion steps."
+        },
+        {
+            "name": "synthesis",
+            "description": "Findings document; non-blocking policy-compliance audit",
+            "mode": "documentation",
+            "post_funcs": ["policy_compliance_audit"],
+            "post_funcs_stop_on_failure": false,
+            "start": "@sub-protocols/optimize-synthesis.md",
+            "end": "Findings written to task work log. policy_compliance_audit results (metric_gaming_flags, if any) propagated as advisory data into the next step's prompt. This step never blocks advance."
+        },
+        {
+            "name": "code-review",
+            "description": "Spec-compliance review + code-quality review on the cumulative diff baseline..best_commit",
+            "mode": "implementation",
+            "pre_funcs": ["resolve_ai_providers", "require_spec_review_passed"],
+            "post_funcs": ["require_spec_review_passed", "verify_tests_pass", "check_completion_evidence", "validate_code_review_in_worklog", "validate_no_critical_issues_in_worklog"],
+            "post_funcs_stop_on_failure": true,
+            "start": "@sub-protocols/code-review.md",
+            "end": "Spec compliance review passed (SPEC_REVIEW: PASSED sentinel recorded). Code review passes with zero critical issues. Final passing review appended to task work log under '# Code Review:'. Advance summary contains verification evidence or 'no-verification-applicable: <reason>'."
+        },
+        {
+            "name": "completion",
+            "description": "User confirms; engine squashes from optimize.best_commit and creates MR/PR with leaderboard",
+            "mode": "discussion",
+            "pre_funcs": ["present_completion_options"],
+            "post_funcs": ["require_discard_confirmation", "completion_dispatch"],
+            "post_funcs_stop_on_failure": true,
+            "start": "@sub-protocols/task-completion.md",
+            "end": "User has confirmed. completion_dispatch routes to _completion_optimize: squash from optimize.best_commit (provider chain) or one of merge_local/push_pr/keep/discard (disabled-provider menu). MR/PR description includes the sorted markdown leaderboard from results.tsv."
+        }
+    ]
+}

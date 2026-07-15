@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "tm": {
+      "command": "python3",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/mcp/bootstrap_mcp.py"]
+    }
+  }
+}

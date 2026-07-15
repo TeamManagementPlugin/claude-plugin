@@ -1,0 +1,54 @@
+{
+    "name": "task",
+    "description": "Complete task lifecycle: investigation with automated task/git/issue setup, implementation, code review, documentation, and user-verified completion.",
+    "steps": [
+        {
+            "name": "investigation",
+            "description": "Understand scope, clarify with user, define task file content for automated creation",
+            "mode": "discussion",
+            "pre_funcs": ["auto_detect_task", "resolve_ai_providers_for_investigation"],
+            "post_funcs": ["git_setup_branch", "create_task_file", "set_task_state", "create_issue_if_enabled", "update_task_status_in_progress"],
+            "post_funcs_stop_on_failure": true,
+            "advance_args": ["task", "branch", "task_content"],
+            "start": "@sub-protocols/task-investigation.md",
+            "end": "You fully understand the task purpose, scope, all affected modules, and have zero remaining questions. You have presented a plan summary to the user and the user has EXPLICITLY agreed to the proposed plan. You have read TEMPLATE.md and composed the complete task file content following that format with measurable success criteria. Deliver it WRITE-FILE-FIRST for substantial files: write the markdown to team-management/tasks/<priority>-<name>.md, then advance with an empty task_content — args: {\"task\": \"<priority>-<name>\", \"branch\": \"<type>/<name>\", \"task_content\": \"\"}. Small files may pass the full markdown inline as task_content. Keep the args object small and emit the call bare. Note: with write-file-first, git_setup_branch (which runs first) pauses on the dirty tree — re-advance with carry_changes: true to carry the task file onto the new branch."
+        },
+        {
+            "name": "implementation",
+            "description": "Implement the task, check off success criteria, pass all tests",
+            "mode": "implementation",
+            "pre_funcs": ["verify_branch_and_task", "resolve_ai_providers_for_implementation"],
+            "start": "@sub-protocols/task-implementation.md",
+            "end": "All success criteria in the task file are checked off. All new code is covered by tests and all tests pass. No unaddressed work remaining. Changes are NOT committed yet."
+        },
+        {
+            "name": "code-review",
+            "description": "Spec compliance review + code quality review. Sentinel SPEC_REVIEW: PASSED required before advance. Summary must evidence verification. Optional test gate runs on advance-out when config.json defines test_command.",
+            "mode": "implementation",
+            "pre_funcs": ["resolve_ai_providers", "require_spec_review_passed"],
+            "post_funcs": ["require_spec_review_passed", "verify_tests_pass", "check_completion_evidence", "validate_code_review_in_worklog", "validate_no_critical_issues_in_worklog"],
+            "post_funcs_stop_on_failure": true,
+            "start": "@sub-protocols/code-review.md",
+            "end": "Spec compliance review passed (SPEC_REVIEW: PASSED sentinel recorded). Code review passes with zero critical issues. If warning enforcement is strict (enforce_warnings=true), zero warnings required — fix all warnings and re-review until clean. If relaxed (enforce_warnings=false or not set), warnings are documented but do not block. Final passing review results are appended to the task work log in the exact format: '# Code Review: [Title]' with Summary, Critical Issues, Warnings, and Notes sections. Advance summary must include verification evidence (fenced block, N/N passed, exit 0) or the 'no-verification-applicable: <reason>' escape hatch."
+        },
+        {
+            "name": "documentation",
+            "description": "Update CLAUDE.md files, finalize task work log, update wiki if enabled",
+            "mode": "documentation",
+            "skip_notification": true,
+            "pre_funcs": ["wiki_update_reminder"],
+            "start": "Update documentation for all affected modules and systems.\n\nSCOPE OF THIS STEP: Only documentation updates. If you discover code changes are needed, use protocol_goto(step_name=\"implementation\") to return to implementation — do NOT write TODOs or skip code fixes.\n\nCLAUDE.md files are a LEAN, LIVING REFERENCE OF THE CURRENT STATE — not a changelog. They are re-read into context every session, so every line costs tokens forever. Keep them concise: only current, load-bearing facts a developer needs to work in the code TODAY.\n- REPLACE, DON'T APPEND: when this task changed behaviour, EDIT the existing description in place to match the new reality and DELETE the superseded wording. Do not stack a new paragraph next to the old one.\n- PRUNE as you go: remove obsolete, duplicated, or superseded entries you encounter — pruning is part of the update, not just adding.\n- NO TASK-BY-TASK HISTORY: do not enumerate tasks or tag entries with task names, dates, or \"(fixed in X)\". That history lives in git and the task work log; the file should read as if written fresh today.\n- If a section has grown into a task-by-task narrative, consolidate it into a description of how the code works NOW.\n\n1. Run service-documentation agent with the list of all services/modules modified during implementation.\n2. Run logging agent to finalize the task work log with completion summary and final status.\n3. Verify all CLAUDE.md files for affected modules describe the CURRENT design accurately and concisely — editing in place and pruning superseded content, not appending a per-task delta.\n4. Ensure the task work log has a complete chronological record of all work done. (The work log keeps full history — the conciseness rule above applies to CLAUDE.md, not the work log.)\n\nNote: documentation mode allows direct editing of CLAUDE.md files and task documentation but blocks source code edits. If a source code edit is blocked, use protocol_goto to go back to implementation.",
+            "end": "All CLAUDE.md files for affected modules are updated. Task work log is finalized with complete documentation of all work performed."
+        },
+        {
+            "name": "completion",
+            "description": "User tests changes, confirms, then dispatcher runs the provider-driven chain or the 4-option menu flow when issue tracking is disabled.",
+            "mode": "discussion",
+            "pre_funcs": ["present_completion_options"],
+            "post_funcs": ["require_discard_confirmation", "completion_dispatch"],
+            "post_funcs_stop_on_failure": true,
+            "start": "@sub-protocols/task-completion.md",
+            "end": "User has tested the changes and explicitly confirmed everything works correctly. Upon calling protocol_advance, the engine automatically handles: committing and pushing changes, creating MR/PR (if provider enabled), updating issue status, archiving task file, cleaning up task-scoped state, and clearing task state. When issue_tracking.provider is 'disabled', the user picks a completion_option from the menu presented on step entry (merge_local / push_pr / keep / discard)."
+        }
+    ]
+}

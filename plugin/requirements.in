@@ -1,0 +1,7 @@
+# Runtime dependencies for the team-management plugin MCP server + hooks.
+# This file is the human-maintained source of truth for runtime deps.
+# Regenerate the lock with:
+#   uv pip compile --generate-hashes --universal plugin/requirements.in -o plugin/requirements.lock
+mcp>=1.28.0        # official MCP SDK; provides mcp.server.fastmcp (imported by plugin/mcp/server.py). NOT the standalone `fastmcp` package — that is unused.
+tiktoken>=0.5.0
+requests>=2.25.0
