@@ -224,6 +224,8 @@ Remove issue link from a task.
 
 The MCP server automatically detects the active provider from `team-management/config.json`.
 
+> **Where tokens go:** the examples below hold only non-secret settings — **API tokens live in the per-project `.claude/state/provider-tokens.json`** (git-ignored, owner-only, keyed `gitlab` / `jira` / `github`), never in `config.json`. The supported flow never writes a token to `config.json`; a token already there from a legacy install still works as a read fallback.
+
 ### GitLab Configuration
 
 ```json
@@ -233,7 +235,6 @@ The MCP server automatically detects the active provider from `team-management/c
   },
   "gitlab": {
     "enabled": true,
-    "api_token": "glpat-xxxxxxxxxxxx",
     "base_url": "https://gitlab.com",
     "project_path": "namespace/project",
     "auto_sync": true,
@@ -251,7 +252,6 @@ The MCP server automatically detects the active provider from `team-management/c
   },
   "jira": {
     "enabled": true,
-    "api_token": "your-jira-token",
     "base_url": "https://jira.company.com",
     "project_key": "PROJ",
     "default_issue_type": "Task",
@@ -269,7 +269,6 @@ The MCP server automatically detects the active provider from `team-management/c
   },
   "github": {
     "enabled": true,
-    "api_token": "ghp_xxxxxxxxxxxx",
     "base_url": "https://api.github.com",
     "repository": "owner/repo",
     "auto_sync": true,
@@ -290,7 +289,6 @@ The MCP server automatically detects the active provider from `team-management/c
   },
   "github": {
     "enabled": true,
-    "api_token": "your-gitea-access-token",
     "base_url": "https://git.example.com/api/v1",
     "repository": "team/project",
     "auto_sync": true,

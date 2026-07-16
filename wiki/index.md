@@ -10,7 +10,7 @@ Pages are listed below by category. New here? Start with the [Architecture Overv
 
 - [Hooks System](pages/subsystems/hooks-system.md) — The Claude Code hook plumbing: event bindings, exit-code contract, per-hook mechanics (enforce/session-start/post-tool-use/user-messages/pre-compact/transcript-link), and cross-hook shared state.
 - [Protocol Engine](pages/subsystems/protocol-engine.md) — JSON-driven workflow state machine: step model, per-step DAIC mode, pre/post-func dispatch, audit log, custom-protocol fork/drift, and the `_PHASE_REGISTRY` AI-provider source of truth.
-- [MCP Server](pages/subsystems/mcp-server.md) — FastMCP server exposing 41 team-management tools across 8 modules, with single-source-of-truth imports resolved plugin-root-first (`${CLAUDE_PLUGIN_ROOT}/hooks`, `.claude/hooks` legacy fallback) and env-based project-root detection.
+- [MCP Server](pages/subsystems/mcp-server.md) — FastMCP server exposing 42 team-management tools across 8 modules, with single-source-of-truth imports resolved plugin-root-first (`${CLAUDE_PLUGIN_ROOT}/hooks`, `.claude/hooks` legacy fallback) and env-based project-root detection.
 - [Plugin Conversion Architecture](pages/subsystems/plugin-conversion.md) — The plugin-era runtime architecture: three-root path model (`PROJECT_DIR`/`PLUGIN_ROOT`/`PLUGIN_DATA`), runtime wiring (hooks shim, MCP cold-start bootstrap, boot-detector, guidance via `@`-includes), the cross-platform `python3` launcher, slash-command vs MCP-tool namespacing (canonical `mcp__plugin_team-management_tm__*` + drift guard), and provider-token continuity.
 - [AI Provider Integration](pages/subsystems/ai-provider-integration.md) — Registry-driven 6-phase dispatch of Codex/agy as parallel Task agents: `_PHASE_REGISTRY`, template lookup, credential filter (16 patterns + PEM pass), sandbox-flag check (`SandboxFlagError`), agy watchdog, and the config-flow setup.
 - [Issue Tracking Providers](pages/subsystems/issue-tracking-providers.md) — Multi-provider issue-tracking layer (GitLab/GitHub/Gitea/Jira): provider ABCs, per-provider quirks, task⇄issue sync, mapping files, and structured error reporting.
@@ -34,7 +34,7 @@ Pages are listed below by category. New here? Start with the [Architecture Overv
 
 ## Entities
 
-- [Specialized Agents](pages/entities/specialized-agents.md) — Catalog of the 17 shipped subagents (investigation, review, logging, issue-sync, external-AI wrappers), their dispatch via `Task`/`subagent_type`, depth-gated DAIC bypass, and the copy-to-customize rule.
+- [Specialized Agents](pages/entities/specialized-agents.md) — Catalog of the 15 shipped subagents (investigation, review, logging, issue-sync, external-AI wrappers), their dispatch via `Task`/`subagent_type`, depth-gated DAIC bypass, and the copy-to-customize rule.
 - [State Files](pages/entities/state-files.md) — Catalog of `.claude/state/` files (task, DAIC mode, subagent depth, optimize, mappings, flags) with the `shared_state` durable-write/lock helpers and the fsync state-sync-race fix.
 - [Configuration Schema](pages/entities/configuration-schema.md) — Reference catalog of every `team-management/config.json` key (providers, AI phases, branch prefixes, `test_command` allowlist, auto_compact) and how each is loaded and consumed.
 
