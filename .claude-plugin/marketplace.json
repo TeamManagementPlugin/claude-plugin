@@ -9,7 +9,7 @@
     {
       "name": "team-management",
       "source": "./plugin",
-      "description": "Enforced DAIC methodology for AI pair programming: discussion-before-implementation hooks, a JSON-driven protocol engine, persistent task management, and multi-provider issue tracking.",
+      "description": "Enforced DAIC methodology for AI pair programming: discussion-before-implementation hooks, a JSON-driven protocol engine, persistent task management, and multi-provider issue tracking (GitLab / Jira / GitHub / Gitea).",
       "license": "MIT"
     }
   ]

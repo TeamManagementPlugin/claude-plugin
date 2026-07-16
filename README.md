@@ -1,10 +1,20 @@
-# team-management
+# team.management
 
-**team-management framework** - A complete workflow management system that transforms Claude Code from a basic AI assistant into a structured, persistent development environment with multi-provider issue tracking integration.
+### Your AI says it's done. Prove it.
+
+**The operating system for human + agent teams.** An open-source protocol engine for Claude Code that puts every process on rails — enforced as it happens, so "done" isn't something you take on faith. No skipped gates, no edited tests, no talking its way through — you see what the AI did, and the corners it couldn't cut.
+
+The model getting more capable does not make it more trustworthy. It makes it a more **convincing liar**. A harness is the answer — and it's yours: not a smarter assistant you hope did the work, but a system you control that **shows the work, blocks the shortcuts, and hands you the proof**.
+
+- **See it.** Watch every step as it runs — which stage it's on, what's allowed, what's done. No black box, no "trust me, it's handled."
+- **Enforce it.** The gate stays shut until the step's criteria are met — no skipping ahead, no editing the tests to pass, no talking its way through.
+- **Prove it.** Every run leaves a record of exactly what happened — the protocol, the steps, the gates it had to pass. Local, version-controlled, yours to keep. The record also says what checked what: review gates are AI judgment; the test gate is deterministic.
+
+A prompt is a request an agent can ignore, forget, or quietly route around — the interesting parts of this system aren't requests, they're walls. The agent **can't** advance past code review without `SPEC_REVIEW: PASSED`, **can't** edit frozen tests or fixtures mid-run, **can't** touch edit tools in discussion mode, and **can't** skip ahead to a step it hasn't earned. Enforcement lives in the runtime — hooks and MCP state transitions — not in the prompt.
 
 ## Overview
 
-team-management enforces the **DAIC (Discussion-Alignment-Implementation-Check)** methodology through Python hooks that cannot be bypassed. When Claude attempts to edit code without explicit user approval, the system blocks the tools and requires discussion first. This prevents over-implementation and ensures collaborative alignment.
+team-management is a **native Claude Code plugin** enforcing the **DAIC (Discussion-Alignment-Implementation-Check)** methodology through Python hooks. When Claude attempts to edit code without explicit user approval, the runtime blocks the tools and requires discussion first. This prevents over-implementation and ensures collaborative alignment.
 
 **Key Capabilities**:
 - **DAIC Enforcement**: Mandatory discussion before code changes via hook-based tool blocking
@@ -86,6 +96,8 @@ directory).
 
 team-management provides full bidirectional integration with three issue tracking systems:
 
+> **Where tokens go:** the config examples below hold only non-secret settings — **API tokens go in the per-project `.claude/state/provider-tokens.json`** (git-ignored, owner-only, keyed `gitlab` / `jira` / `github`), never in `config.json`. The supported flow never writes a token to `config.json`; a token already there from a legacy install still works as a read fallback. See [Provider Setup](#provider-setup).
+
 ### GitLab
 
 **Features**:
@@ -103,7 +115,6 @@ team-management provides full bidirectional integration with three issue trackin
   },
   "gitlab": {
     "enabled": true,
-    "api_token": "glpat-your-token",
     "base_url": "https://gitlab.com",
     "project_path": "namespace/project",
     "auto_sync": true,
@@ -136,7 +147,6 @@ team-management provides full bidirectional integration with three issue trackin
   },
   "jira": {
     "enabled": true,
-    "api_token": "your-personal-access-token",
     "base_url": "https://company.atlassian.net",
     "project_key": "PROJ",
     "auto_sync": true,
@@ -171,7 +181,6 @@ team-management provides full bidirectional integration with three issue trackin
   },
   "github": {
     "enabled": true,
-    "api_token": "ghp_your-token",
     "base_url": "https://api.github.com",
     "repository": "owner/repo",
     "auto_sync": true,
@@ -193,7 +202,6 @@ team-management provides full bidirectional integration with three issue trackin
   },
   "github": {
     "enabled": true,
-    "api_token": "your-gitea-access-token",
     "base_url": "https://git.example.com/api/v1",
     "repository": "team/project",
     "auto_sync": true,
@@ -501,7 +509,7 @@ team-management stands on the shoulders of projects and ideas that shaped its de
   model team-management is built on.
 - **[superpowers](https://github.com/obra/superpowers)** by Jesse Vincent (obra) — a composable-skills
   methodology for coding agents; inspiration for the skill/protocol-driven workflow.
-- **[get-shit-done](https://github.com/open-gsd/gsd-core)** GSD Core — meta-prompting, context
+- **[get-shit-done](https://github.com/open-gsd/gsd-core)** by open-gsd — meta-prompting, context
   engineering, and spec-driven development for AI coding agents.
 - **[LLM Wiki](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f)** by Andrej Karpathy —
   the persistent, compounding AI-maintained knowledge-base pattern behind the **LLM Wiki** feature.
@@ -512,3 +520,12 @@ team-management stands on the shoulders of projects and ideas that shaped its de
 
 **Links**:
 - [MCP Server Documentation](docs/MCP_SERVER.md)
+- [Website](https://team.management)
+
+---
+
+Conceived & directed by **Alex Rozanski** · Crafted & implemented by **Max Tushkov**
+
+*An independent project — not affiliated with or endorsed by any AI provider. All product names and logos are the property of their respective owners.*
+
+*Enjoy working, knowing your process is being followed.*
