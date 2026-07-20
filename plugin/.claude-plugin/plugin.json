@@ -1,6 +1,6 @@
 {
   "name": "team-management",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "description": "Enforced DAIC methodology for AI pair programming: discussion-before-implementation hooks, a JSON-driven protocol engine, persistent task management, and multi-provider issue tracking (GitLab / Jira / GitHub / Gitea).",
   "author": { "name": "Team Management" },
   "homepage": "https://github.com/TeamManagementPlugin/claude-plugin",
