@@ -7,9 +7,11 @@ The tests guard the contract:
 - codex-cli MUST NOT carry the Write tool in its frontmatter.
 - Neither wrapper carries the old review-shape template markers
   (## Critical Issues / ## Warnings) — those are the caller's concern now.
-- agy-cli always passes --sandbox + --print-timeout, never
-  --dangerously-skip-permissions, and carries the git-status mutation check
-  (detect & report) with the `agy review WARNING:` prefix contract.
+- agy-cli passes --add-dir + --dangerously-skip-permissions + --print-timeout and
+  NEVER --sandbox (the sandbox breaks git on macOS); it is contained by a
+  project-local .agents/ read-only deny-gate (preflight-verified) and carries the
+  git-status mutation check (detect & report) with the `agy review WARNING:` prefix
+  contract. It still must never touch ~/.gemini/.
 - Shell-injection via task name passed inside a heredoc must not trigger
   expansion (validates the literal-EOF `<<'PROMPT'` quoting policy).
 
@@ -126,17 +128,29 @@ class AgyWrapperTest(TestCase):
         self.assertNotIn("-m $MODEL", self.text)
         self.assertNotIn('--model', self.text)
 
-    def test_agy_preserves_sandbox_flag(self):
-        self.assertIn("--sandbox", self.text)
+    def test_agy_drops_sandbox_uses_skip_permissions(self):
+        """--sandbox breaks git on macOS ($TMPDIR/xcrun block) and must not be
+        PASSED; the wrapper runs --add-dir + --dangerously-skip-permissions
+        instead, contained by the read-only gate. --sandbox may still be MENTIONED
+        in prose (explaining why it's removed), so assert the invocation-flag forms
+        are absent rather than the whole string."""
+        self.assertIn("--dangerously-skip-permissions", self.text)
+        self.assertIn("--add-dir", self.text)
+        self.assertNotIn("--sandbox \\", self.text)   # not a continuation-line flag
+        self.assertNotIn("agy --sandbox", self.text)  # not inline in the command
 
     def test_agy_passes_print_timeout(self):
         """agy's own deadline must always be passed (the external TIMEOUT_CMD
         is only a backstop and is absent on macOS without coreutils)."""
         self.assertIn("--print-timeout 300s", self.text)
 
-    def test_agy_forbids_dangerously_skip_permissions(self):
-        """The boundary block must explicitly forbid the auto-approve flag."""
-        self.assertIn("Never use `--dangerously-skip-permissions`", self.text)
+    def test_agy_requires_gate_preflight_for_skip_permissions(self):
+        """--dangerously-skip-permissions is now REQUIRED (headless soft-deny)
+        but MUST be contained: the wrapper preflight-checks the .agents/ read-only
+        gate and refuses to run uncontained."""
+        self.assertIn("--dangerously-skip-permissions", self.text)
+        self.assertIn("team-management-readonly-gate", self.text)
+        self.assertIn("read-only gate not deployed", self.text)
 
     def test_agy_has_mutation_check(self):
         """Detect & report contract: porcelain snapshot before/after the call,

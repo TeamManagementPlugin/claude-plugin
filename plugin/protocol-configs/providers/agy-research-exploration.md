@@ -7,7 +7,7 @@ Task file: `{task_file_path}`
 {plan_summary}
 
 ## Your job
-Run `agy --sandbox -p ...` (terminal sandbox; analysis only — do NOT create or modify any files) and explore the codebase independently of the main code-explorer agents. Trace execution flows, map dependencies, and surface key findings. The main agents will produce their own readings — do not duplicate; complement.
+Run `agy --dangerously-skip-permissions -p ...` (contained by the project read-only gate; analysis only — do NOT create or modify any files) and explore the codebase independently of the main code-explorer agents. Trace execution flows, map dependencies, and surface key findings. The main agents will produce their own readings — do not duplicate; complement.
 
 ## Output shape
 Markdown headings; concise findings.

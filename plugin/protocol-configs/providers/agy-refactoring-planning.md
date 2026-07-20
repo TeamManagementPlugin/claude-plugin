@@ -7,7 +7,7 @@ Task file: `{task_file_path}`
 {plan_summary}
 
 ## Your job
-Run `agy --sandbox -p ...` (terminal sandbox; analysis only — do NOT create or modify any files) and review the refactoring plan against the existing code. Refactoring's safety net is the test suite — your job is to flag refactor steps the existing tests do NOT cover, so the planner can either add a test first or pick a smaller increment.
+Run `agy --dangerously-skip-permissions -p ...` (contained by the project read-only gate; analysis only — do NOT create or modify any files) and review the refactoring plan against the existing code. Refactoring's safety net is the test suite — your job is to flag refactor steps the existing tests do NOT cover, so the planner can either add a test first or pick a smaller increment.
 
 ## Output shape
 Markdown headings; concise findings.

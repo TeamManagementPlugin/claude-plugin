@@ -10,7 +10,8 @@ from shared_state import (
     resolve_protocol_start_text, reset_subagent_depth,
     parse_task_frontmatter, _write_json_durable, ensure_task_template_deployed,
     ensure_provider_tokens_file, ensure_claude_dir_gitignored,
-    ensure_guidance_deployed_and_wired
+    ensure_guidance_deployed_and_wired,
+    ensure_agy_readonly_gate_deployed, _agy_enabled
 )
 from boot_detector import detect_legacy_install
 
@@ -535,18 +536,26 @@ if is_plugin_mode():
     if (PROJECT_ROOT / 'team-management').is_dir():
         ensure_task_template_deployed(PROJECT_ROOT, _plugin_root)
         _wiki_enabled = False
+        _cfg_data = {}
         try:
             _cfg = PROJECT_ROOT / 'team-management' / 'config.json'
             if _cfg.exists():
-                _wiki_enabled = bool(
-                    json.loads(_cfg.read_text(encoding='utf-8')).get('wiki', {}).get('enabled', False)
-                )
+                _loaded = json.loads(_cfg.read_text(encoding='utf-8'))
+                if isinstance(_loaded, dict):
+                    _cfg_data = _loaded
+                _wiki_enabled = bool(_cfg_data.get('wiki', {}).get('enabled', False))
         # AttributeError/TypeError widen the guard: a malformed config.json (non-dict
         # root, or a non-dict `wiki` value) must leave _wiki_enabled=False, never crash
         # the hook so additionalContext is never emitted (code-review Note 1).
         except (OSError, ValueError, AttributeError, TypeError):
             pass
         ensure_guidance_deployed_and_wired(PROJECT_ROOT, _plugin_root, _wiki_enabled)
+        # Deploy the agy read-only PreToolUse deny-gate into the project whenever agy
+        # is an enabled provider, so `.agents/hooks.json` is present and the agy-cli
+        # wrapper's `--dangerously-skip-permissions` review runs CONTAINED. Merge-aware
+        # (never clobbers a user's own .agents hooks); best-effort.
+        if _agy_enabled(_cfg_data):
+            ensure_agy_readonly_gate_deployed(PROJECT_ROOT, _plugin_root)
     # Boot-detector advisory.
     _legacy = detect_legacy_install(PROJECT_ROOT)
     if _legacy:

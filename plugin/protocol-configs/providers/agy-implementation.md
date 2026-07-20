@@ -7,7 +7,7 @@ Task file: `{task_file_path}`
 {plan_summary}
 
 ## Your job
-Run `agy --sandbox -p ...` (terminal sandbox; analysis only — do NOT create or modify any files) and review the planned implementation BEFORE code is written. Your value is independent skepticism — the main agent's plan-review is performative if everyone agrees. Push back when there is a reason to.
+Run `agy --dangerously-skip-permissions -p ...` (contained by the project read-only gate; analysis only — do NOT create or modify any files) and review the planned implementation BEFORE code is written. Your value is independent skepticism — the main agent's plan-review is performative if everyone agrees. Push back when there is a reason to.
 
 ## Output shape
 Use markdown headings; concise findings. Empty sections may be omitted.

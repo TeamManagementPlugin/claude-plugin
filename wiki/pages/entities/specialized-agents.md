@@ -2,7 +2,7 @@
 title: Specialized Agents
 tags: [agents, ai-providers, protocols]
 created: 2026-05-31
-updated: 2026-07-04
+updated: 2026-07-20
 sources: [plugin/agents/CLAUDE.md, plugin/agents/*.md, plugin/protocol-configs/sub-protocols/]
 ---
 
@@ -44,7 +44,7 @@ Dispatched as a single parallel-dispatch message in `sub-protocols/brainstorm-an
 - **Retired (`m-retire-dead-agents-and-daic-cleanup`).** The dedicated `gitlab-sync` / `jira-sync` agents were removed. Task completion is driven by the protocol engine's `completion_dispatch` func + the `sub-protocols/task-completion.md` runtime sub-protocol, not by named agents; issue-tracking operations are exposed directly as `mcp__plugin_team-management_tm__issue_*` MCP tools. See [Issue Tracking Providers](pages/subsystems/issue-tracking-providers.md).
 
 ### External AI provider wrappers
-- **codex-cli** (`codex-cli.md`) and **agy-cli** (`agy-cli.md`) — thin pass-through wrappers (tools `Read, Bash, Grep, Glob` — no `Write`) that shell out to the `codex` / `agy` CLI under a read-only sandbox and return raw stdout verbatim. The **caller owns the full prompt** (a protocol pre_func builds it). codex runs `codex review --uncommitted` or `codex exec -s read-only`; agy always passes `--sandbox --print-timeout 300s`. agy's OS sandbox blocks shell writes but not its own `write_file` tool, so agy-cli snapshots `git status --porcelain` before/after and prepends an `agy review WARNING: agy modified files…` line on any diff (detect & report, never auto-revert). On failure they return a single `<provider> review unavailable: …` line — never blocking. Full mechanics (registry-driven dispatch, sandbox-flag check via `SandboxFlagError`, credential filter, watchdog/timeout) live in [AI Provider Integration](pages/subsystems/ai-provider-integration.md).
+- **codex-cli** (`codex-cli.md`) and **agy-cli** (`agy-cli.md`) — thin pass-through wrappers (tools `Read, Bash, Grep, Glob` — no `Write`) that shell out to the `codex` / `agy` CLI in read-only mode and return raw stdout verbatim. The **caller owns the full prompt** (a protocol pre_func builds it). codex runs `codex review --uncommitted` or `codex exec -s read-only` (its own sandbox); agy runs `agy --add-dir "$PWD" --dangerously-skip-permissions --print-timeout 300s` — NO `--sandbox` (it breaks git on macOS), read-only enforced instead by a project-local `.agents/` PreToolUse deny-gate that agy-cli preflight-verifies before running. agy-cli also snapshots `git status --porcelain` before/after and prepends an `agy review WARNING: agy modified files…` line on any diff (detect & report, never auto-revert). On failure they return a single `<provider> review unavailable: …` line — never blocking. Full mechanics (registry-driven dispatch, read-only-flag check via `SandboxFlagError`, the deny-gate + its deployment, credential filter, watchdog/timeout) live in [AI Provider Integration](pages/subsystems/ai-provider-integration.md).
 
 ## Mechanics
 

@@ -79,5 +79,45 @@ class AgyWatchdogDriftGuardTest(TestCase):
         self.assertIn("(non-zero", self.text)
 
 
+class AgyInvocationContractTest(TestCase):
+    """The macOS fix (m-fix-agy-headless-review): drop --sandbox (it blocks git),
+    bind the workspace with --add-dir, run --dangerously-skip-permissions
+    CONTAINED by the project-local read-only gate (preflight-verified)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.text = AGY_CLI_MD.read_text(encoding="utf-8")
+
+    def test_both_branches_add_dir(self):
+        """--add-dir "$PWD" binds the repo as agy's workspace on BOTH watchdog
+        branches (else agy runs git from a default dir → 'not a git repository',
+        and the .agents/ gate is not discovered)."""
+        self.assertEqual(self.text.count('--add-dir "$PWD" \\'), 2)
+
+    def test_both_branches_skip_permissions(self):
+        """--dangerously-skip-permissions gets past the headless soft-deny on
+        BOTH branches (it is the only reliable way past print-mode soft-deny)."""
+        self.assertEqual(self.text.count("--dangerously-skip-permissions \\"), 2)
+
+    def test_no_sandbox_flag_in_invocation(self):
+        """--sandbox must NOT be passed (it breaks git's $TMPDIR cache on macOS).
+        It may still be MENTIONED in prose explaining the removal."""
+        self.assertNotIn("--sandbox \\", self.text)
+        self.assertNotIn("agy --sandbox", self.text)
+
+    def test_print_timeout_still_passed(self):
+        self.assertIn("--print-timeout 300s", self.text)
+
+    def test_gate_preflight_present(self):
+        """The wrapper must refuse to run uncontained: a preflight checks the
+        project's read-only gate before invoking skip-permissions."""
+        self.assertIn("team-management-readonly-gate", self.text)
+        self.assertIn("agy-readonly-gate.py", self.text)
+        self.assertIn("read-only gate not deployed", self.text)
+
+    def test_env_scrub_preserved(self):
+        self.assertEqual(self.text.count('env -i PATH="$PATH" HOME="$HOME" agy'), 2)
+
+
 if __name__ == "__main__":
     main()

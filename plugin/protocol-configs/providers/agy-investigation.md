@@ -7,7 +7,7 @@ Task file: `{task_file_path}`
 {plan_summary}
 
 ## Your job
-Run `agy --sandbox -p ...` (terminal sandbox; analysis only — do NOT create or modify any files) against the repository and produce an independent reading of the task scope. Focus on what the main agent's investigation step is likely to miss: hidden coupling, prior decisions that constrain the design, unstated assumptions in the task file.
+Run `agy --dangerously-skip-permissions -p ...` (contained by the project read-only gate; analysis only — do NOT create or modify any files) against the repository and produce an independent reading of the task scope. Focus on what the main agent's investigation step is likely to miss: hidden coupling, prior decisions that constrain the design, unstated assumptions in the task file.
 
 ## Output shape
 Markdown headings; one or two short bullets per section. Empty sections may be omitted.
