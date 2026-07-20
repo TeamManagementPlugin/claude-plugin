@@ -2224,14 +2224,15 @@ class _AIProviderPhaseTestMixin:
         with self.assertRaises(ValueError):
             self._pre_func()
 
-    def test_agy_sandbox_assertion_raises_on_drift(self):
-        """If a custom agy template omits `--sandbox`, the assertion fires."""
+    def test_agy_missing_skip_permissions_raises_on_drift(self):
+        """If a custom agy template omits `--dangerously-skip-permissions`, the
+        assertion fires (headless agy soft-denies commands without it)."""
         from protocol_engine import _PHASE_REGISTRY
         entry = _PHASE_REGISTRY[self.PHASE_KEY]
         custom_path = (self.temp_dir / "team-management" / "protocol-configs"
                        / "custom" / "providers" / f"agy-{entry['template_subpath']}.md")
         custom_path.write_text(
-            "Bogus agy prompt without the sandbox flag (test of assertion).",
+            "Bogus agy prompt without the read-only flag (test of assertion).",
             encoding="utf-8",
         )
         self._write_config(enabled_providers=["agy"], codex_enabled=False)
@@ -2239,17 +2240,35 @@ class _AIProviderPhaseTestMixin:
         with self.assertRaises(ValueError):
             self._pre_func()
 
-    def test_agy_inline_default_passes_sandbox_assertion(self):
+    def test_agy_stale_sandbox_raises_on_drift(self):
+        """A custom agy template that still carries `--sandbox` (even WITH the
+        skip-permissions flag) fires the assertion — --sandbox breaks git on
+        macOS, so the drift must be caught, not silently tolerated."""
+        from protocol_engine import _PHASE_REGISTRY
+        entry = _PHASE_REGISTRY[self.PHASE_KEY]
+        custom_path = (self.temp_dir / "team-management" / "protocol-configs"
+                       / "custom" / "providers" / f"agy-{entry['template_subpath']}.md")
+        custom_path.write_text(
+            "Run agy --sandbox --dangerously-skip-permissions -p ... (stale sandbox flag).",
+            encoding="utf-8",
+        )
+        self._write_config(enabled_providers=["agy"], codex_enabled=False)
+        with self.assertRaises(ValueError):
+            self._pre_func()
+
+    def test_agy_inline_default_passes_readonly_assertion(self):
         """With NO agy template on disk anywhere, the inline default template
-        must carry the literal `--sandbox` so the assertion does not fire and
-        the pre_func succeeds (cold-start / missing-template degradation)."""
+        must carry `--dangerously-skip-permissions` and NOT `--sandbox` so the
+        assertion does not fire and the pre_func succeeds (cold-start /
+        missing-template degradation)."""
         # The temp project root has no template dirs at all — the 3-tier disk
         # lookup misses and the inline default is used.
         self._write_config(enabled_providers=["agy"], codex_enabled=False)
         result = self._pre_func()
         self.assertTrue(result["success"])
         self.assertEqual(result["providers"], ["agy"])
-        self.assertIn("--sandbox", result["instructions"])
+        self.assertIn("--dangerously-skip-permissions", result["instructions"])
+        self.assertNotIn("agy with `--sandbox`", result["instructions"])
 
 
 class CredentialFilterTest(TestCase):
@@ -2447,18 +2466,31 @@ class SandboxFlagEnforcementTest(TestCase):
             self.check(
                 enabled=["codex"], subcommand="exec",
                 codex_task="codex exec without the flag",
-                agy_task="agy --sandbox -p x",
+                agy_task="agy --dangerously-skip-permissions -p x",
                 func_name="resolve_ai_providers_for_investigation",
                 phase="task investigation",
             )
         self.assertIn("-s read-only", str(ctx.exception))
 
-    def test_agy_missing_sandbox_raises(self):
+    def test_agy_missing_skip_permissions_raises(self):
         with self.assertRaises(ValueError) as ctx:
             self.check(
                 enabled=["agy"], subcommand="exec",
                 codex_task="codex exec -s read-only -p x",
                 agy_task="agy without the flag",
+                func_name="resolve_ai_providers_for_investigation",
+                phase="task investigation",
+            )
+        self.assertIn("--dangerously-skip-permissions", str(ctx.exception))
+
+    def test_agy_stale_sandbox_raises(self):
+        """--sandbox breaks git on macOS; carrying it (even alongside the
+        skip-permissions flag) must fire the assertion."""
+        with self.assertRaises(ValueError) as ctx:
+            self.check(
+                enabled=["agy"], subcommand="exec",
+                codex_task="codex exec -s read-only -p x",
+                agy_task="agy --sandbox --dangerously-skip-permissions -p x",
                 func_name="resolve_ai_providers_for_investigation",
                 phase="task investigation",
             )
@@ -2468,7 +2500,7 @@ class SandboxFlagEnforcementTest(TestCase):
         self.check(
             enabled=["codex", "agy"], subcommand="exec",
             codex_task="codex exec -s read-only -p x",
-            agy_task="agy --sandbox -p x",
+            agy_task="agy --dangerously-skip-permissions -p x",
             func_name="f", phase="p",
         )
 
@@ -2477,7 +2509,7 @@ class SandboxFlagEnforcementTest(TestCase):
         self.check(
             enabled=["codex"], subcommand="review",
             codex_task="codex review --uncommitted",
-            agy_task="agy --sandbox -p x",
+            agy_task="agy --dangerously-skip-permissions -p x",
             func_name="f", phase="p",
         )
 

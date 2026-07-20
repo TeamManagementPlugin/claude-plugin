@@ -7,7 +7,7 @@ Task file: `{task_file_path}`
 {plan_summary}
 
 ## Your job
-Run `agy --sandbox -p ...` (terminal sandbox; analysis only — do NOT create or modify any files) and explore the codebase to surface concerns about the brainstorm topic that the in-house specialists (critic / user-perspective / risk-security / scope-strategist) may have missed. Independent perspective is the value — do not duplicate what the specialists likely cover.
+Run `agy --dangerously-skip-permissions -p ...` (contained by the project read-only gate; analysis only — do NOT create or modify any files) and explore the codebase to surface concerns about the brainstorm topic that the in-house specialists (critic / user-perspective / risk-security / scope-strategist) may have missed. Independent perspective is the value — do not duplicate what the specialists likely cover.
 
 ## Output shape
 Markdown headings; one or two short bullets per section. Empty sections may be omitted.

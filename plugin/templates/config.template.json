@@ -22,7 +22,7 @@
   "agy": {
     "enabled": false
   },
-  "_comment_agy": "Google Antigravity CLI (agy) provider. Runs `agy --sandbox --print-timeout 300s -p ...` — the OS sandbox blocks shell writes; the wrapper detects and reports file mutations via a git-status check. The framework does not override model selection — agy uses its CLI-default model (change via `agy --model <name>` or the agy /settings UI). Requires: Antigravity CLI installed and authenticated (run `agy` once to sign in).",
+  "_comment_agy": "Google Antigravity CLI (agy) provider. Runs `agy --add-dir <project> --dangerously-skip-permissions --print-timeout 300s -p ...` (NO --sandbox — on macOS the sandbox blocks git and produces no review). skip-permissions gets past the headless soft-deny and is CONTAINED by a project-local `.agents/hooks.json` read-only deny-gate that team-management deploys automatically when agy is enabled (merge-aware); the wrapper also detects and reports any file mutations via a git-status check. Note: agy reads `.agents/hooks.json` for ANY agy invocation in this project, so your own manual `agy` runs here are also read-only-restricted (fails safe — more restrictive, never less). The framework does not override model selection — agy uses its CLI-default model (change via `agy --model <name>` or the agy /settings UI). Requires: Antigravity CLI installed and authenticated (run `agy` once to sign in).",
   "blocked_tools": [
     "Edit",
     "Write",

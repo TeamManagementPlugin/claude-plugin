@@ -173,6 +173,132 @@ def _refresh_file_if_changed(src, dest):
     return True
 
 
+# --- agy read-only PreToolUse deny-gate deployment ------------------------------
+# The agy-cli wrapper runs `agy --dangerously-skip-permissions` for headless review
+# (headless print mode otherwise soft-denies every command). skip-permissions is
+# CONTAINED by a project-local `.agents/hooks.json` PreToolUse hook that hard-denies
+# any tool call outside a read-only allowlist. team-management deploys that gate into
+# a project whenever agy is an enabled provider (SessionStart + config_update).
+_AGY_GATE_HOOK_NAME = "team-management-readonly-gate"
+_AGY_GATE_SCRIPT = "agy-readonly-gate.py"
+
+
+def _agy_enabled(config):
+    """True iff agy would actually be dispatched as an AI provider.
+
+    Mirrors the dual gate the AI-provider resolver uses (``ai_providers.py``
+    ``_resolve_ai_providers``): agy must be listed in
+    ``ai_providers.enabled_providers`` AND ``agy.enabled`` must be true. Kept in
+    lockstep with that check so the gate is deployed exactly when agy can run.
+    isinstance-guarded so a malformed config never raises.
+    """
+    if not isinstance(config, dict):
+        return False
+    ai = config.get("ai_providers")
+    enabled_providers = ai.get("enabled_providers", []) if isinstance(ai, dict) else []
+    agy = config.get("agy")
+    agy_enabled = bool(agy.get("enabled", False)) if isinstance(agy, dict) else False
+    return "agy" in (enabled_providers or []) and agy_enabled
+
+
+def _agy_gate_hooks_entry():
+    """The team-management named-hook entry for a project's .agents/hooks.json.
+
+    The command is RELATIVE (``python3 agy-readonly-gate.py``): agy runs a hook
+    command via ``sh -c`` with cwd set to the directory containing hooks.json
+    (``.agents/``), so a relative reference is portable — it survives the project
+    moving and needs no absolute path baked into a committable file.
+    """
+    return {
+        "PreToolUse": [
+            {
+                "matcher": "*",
+                "hooks": [
+                    {"type": "command", "command": f"python3 {_AGY_GATE_SCRIPT}", "timeout": 10},
+                ],
+            }
+        ]
+    }
+
+
+def agy_gate_is_deployed(project_root):
+    """True iff a project's .agents/hooks.json already carries our named gate hook.
+
+    Consumed by the agy-cli wrapper's preflight so it never runs
+    ``--dangerously-skip-permissions`` uncontained. Requires ALL of: the gate
+    script present, hooks.json parseable as a JSON object, and our named entry
+    DEEP-EQUAL to the canonical entry (so a tampered command target, a hook
+    pointed at another script, or a structurally-wrong entry fails the check
+    rather than passing a mere key-presence test). Best-effort — any error → False.
+    """
+    try:
+        agents = Path(project_root) / '.agents'
+        hooks_json = agents / 'hooks.json'
+        if not (agents / _AGY_GATE_SCRIPT).exists() or not hooks_json.exists():
+            return False
+        data = json.loads(hooks_json.read_text(encoding='utf-8'))
+        return (isinstance(data, dict)
+                and data.get(_AGY_GATE_HOOK_NAME) == _agy_gate_hooks_entry())
+    except Exception:
+        return False
+
+
+def ensure_agy_readonly_gate_deployed(project_root, plugin_root):
+    """Deploy the agy read-only PreToolUse deny-gate into a project (best-effort).
+
+    Called whenever agy is an enabled provider (SessionStart plugin block + the
+    config_update MCP tool). Deploys two artefacts under ``<project>/.agents/``:
+
+      - ``agy-readonly-gate.py`` — refresh-on-change byte copy of the plugin
+        source (plugin-owned, replaced on update, like the guidance files);
+      - ``hooks.json`` — MERGE-AWARE: the named hook
+        ``team-management-readonly-gate`` is added/updated while every OTHER
+        top-level key (the user's own agy hooks) is preserved verbatim. A
+        pre-existing hooks.json that is not a JSON object is left UNTOUCHED (a
+        breadcrumb is written) rather than clobbered — a safe degradation
+        (the wrapper preflight then reports the gate is not deployed).
+
+    Best-effort: any error → one stderr breadcrumb + ``False``. A ``None``
+    plugin_root or an absent source degrades to a no-op. Returns ``True`` when it
+    wrote/updated hooks.json, else ``False``.
+    """
+    try:
+        if plugin_root is None:
+            return False
+        src = Path(plugin_root) / 'templates' / _AGY_GATE_SCRIPT
+        if not src.exists():
+            return False
+        agents_dir = Path(project_root) / '.agents'
+        agents_dir.mkdir(parents=True, exist_ok=True)
+        # 1. Deploy the gate script (refresh-on-change; plugin-owned, replaced on update).
+        _refresh_file_if_changed(src, agents_dir / _AGY_GATE_SCRIPT)
+        # 2. Merge our named hook into hooks.json without clobbering user hooks.
+        hooks_path = agents_dir / 'hooks.json'
+        data = {}
+        if hooks_path.exists():
+            try:
+                data = json.loads(hooks_path.read_text(encoding='utf-8'))
+            except (OSError, ValueError):
+                data = None
+            if not isinstance(data, dict):
+                sys.stderr.write(
+                    "[team-management] .agents/hooks.json is not a JSON object; "
+                    "leaving it untouched (agy read-only gate not wired)\n"
+                )
+                return False
+        desired = _agy_gate_hooks_entry()
+        if data.get(_AGY_GATE_HOOK_NAME) == desired:
+            return False  # already current — skip the write (no needless git churn)
+        data[_AGY_GATE_HOOK_NAME] = desired
+        _write_json_durable(hooks_path, data)
+        return True
+    except Exception as exc:
+        sys.stderr.write(
+            f"[team-management] could not deploy agy read-only gate: {exc}\n"
+        )
+        return False
+
+
 # Plugin-owned behavioral-guidance files deployed into a project so they can be
 # wired into the project's CLAUDE.md via native @-includes (durable across /compact)
 # instead of injected as one-shot SessionStart additionalContext (which fades out of

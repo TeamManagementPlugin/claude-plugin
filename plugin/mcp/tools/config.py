@@ -551,6 +551,16 @@ def register_tools(mcp):
         shared_state.ensure_guidance_deployed_and_wired(
             project_root, shared_state.get_plugin_root(), _wiki_on)
 
+        # 8c-bis. Deploy the agy read-only PreToolUse deny-gate into the project when
+        #     agy is an enabled provider, so `.agents/hooks.json` is present the moment
+        #     the user turns agy on via /team-management:config (matching what the
+        #     SessionStart hook does on restart). This is what CONTAINS the agy-cli
+        #     wrapper's --dangerously-skip-permissions review. Merge-aware (never
+        #     clobbers a user's own .agents hooks); best-effort; never affects the result.
+        if shared_state._agy_enabled(config):
+            shared_state.ensure_agy_readonly_gate_deployed(
+                project_root, shared_state.get_plugin_root())
+
         # 8d. Seed the per-project provider-token file (create-if-absent) so the user
         #     has a template to fill in — tokens live in
         #     .claude/state/provider-tokens.json (per-project, git-ignored, 0600,

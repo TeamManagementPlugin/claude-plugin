@@ -226,12 +226,16 @@ class SandboxFlagError(ValueError):
 
 def _ensure_sandbox_flags(*, enabled, subcommand, codex_task, agy_task,
                           func_name, phase):
-    """Trust-boundary check: provider prompts must carry their sandbox flags.
+    """Trust-boundary check: provider prompts must carry their read-only flags.
 
     Raises SandboxFlagError — deliberately NOT `assert`, which `python -O`
     strips, silently removing the check (audit finding M3). Codex `exec`
     requires the literal `-s read-only`; `codex review` is skipped (it has its
-    own sandbox); agy always requires `--sandbox`.
+    own sandbox). agy requires `--dangerously-skip-permissions` (headless print
+    mode soft-denies every command without it) and must NOT carry `--sandbox`
+    (on macOS the sandbox blocks git's $TMPDIR cache write, so every git command
+    fails — the agy-cli wrapper is contained by a project-local `.agents/`
+    read-only deny-gate instead, verified by its preflight).
     """
     if "codex" in enabled and subcommand == "exec" and "-s read-only" not in codex_task:
         raise SandboxFlagError(
@@ -239,12 +243,22 @@ def _ensure_sandbox_flags(*, enabled, subcommand, codex_task, agy_task,
             f"flag required for codex exec subcommand. Check the custom or system "
             f"template for `codex-{phase}.md`."
         )
-    if "agy" in enabled and "--sandbox" not in agy_task:
-        raise SandboxFlagError(
-            f"_resolve_ai_providers({func_name}): agy_task missing "
-            f"'--sandbox' flag. Check the custom or system template "
-            f"for `agy-{phase}.md`."
-        )
+    if "agy" in enabled:
+        if "--dangerously-skip-permissions" not in agy_task:
+            raise SandboxFlagError(
+                f"_resolve_ai_providers({func_name}): agy_task missing "
+                f"'--dangerously-skip-permissions' flag (required — headless agy "
+                f"soft-denies commands without it; it is contained by the project "
+                f"read-only gate). If you have a custom `agy-{phase}.md` template, "
+                f"update its invocation (agy no longer uses --sandbox)."
+            )
+        if "--sandbox" in agy_task:
+            raise SandboxFlagError(
+                f"_resolve_ai_providers({func_name}): agy_task must NOT carry "
+                f"'--sandbox' — it breaks git on macOS. agy is contained by the "
+                f"project read-only gate instead. Update the custom or system "
+                f"template for `agy-{phase}.md`."
+            )
 
 # Inline default template used when no provider template file is found on disk.
 # Generic phase-agnostic boilerplate that still satisfies the sandbox-flag assertion.
@@ -256,8 +270,8 @@ Task file: {task_file_path}
 {plan_summary}
 
 ## Your job
-Provide independent analysis through your sandboxed CLI (codex exec with `-s read-only`,
-or agy with `--sandbox`). Output the standard markdown headings:
+Provide independent analysis through your read-only CLI (codex exec with `-s read-only`,
+or agy with `--dangerously-skip-permissions`). Output the standard markdown headings:
 ## Plan Summary
 ## Risks
 ## Open Questions
@@ -286,7 +300,7 @@ class AIProvidersMixin:
             phase=entry["description"],
             companion=entry["companion"],
             codex_task="Run `codex review --uncommitted`. Files modified: <list>. Focus on bugs, security, and consistency with existing patterns.",
-            agy_task="Review the uncommitted changes with `agy --sandbox -p ...` (terminal sandbox; analysis only — do NOT create or modify any files) for bugs, security issues, and consistency with existing patterns. Files modified: <list>.",
+            agy_task="Review the uncommitted changes with `agy --dangerously-skip-permissions -p ...` (contained by the project read-only gate; analysis only — do NOT create or modify any files) for bugs, security issues, and consistency with existing patterns. Files modified: <list>.",
             subcommand=entry["subcommand"],
         )
 
@@ -494,10 +508,11 @@ class AIProvidersMixin:
         Pre-injection guards:
         - Credential filter applied to codex_task and agy_task strings (catches
           credentials substituted in from {plan_summary}).
-        - Sandbox-flag assertion: codex `exec` subcommand MUST contain `-s read-only`;
+        - Read-only-flag assertion: codex `exec` subcommand MUST contain `-s read-only`;
           codex `review` skips the check (review has its own sandbox); agy MUST
-          contain `--sandbox` always (the agy-cli wrapper enforces the flag at
-          invocation time; the assertion guards template drift).
+          contain `--dangerously-skip-permissions` and MUST NOT contain `--sandbox`
+          (the agy-cli wrapper runs contained by a project-local `.agents/` read-only
+          gate; the assertion guards template drift).
 
         Output contract embedded in instructions: main agent wraps provider output in
         `<codex-output>...</codex-output>` / `<agy-output>...</agy-output>`
