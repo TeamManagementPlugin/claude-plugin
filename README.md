@@ -9,8 +9,8 @@
 <p align="center"><em>On your terms with AI.</em></p>
 
 <p align="center">
-  An open-source Claude Code plugin that keeps your process on rails — the steps are
-  enforced by hooks in the runtime as the work happens, not just suggested in a prompt.
+  An open-source Claude Code plugin that puts every process on rails — the steps are
+  enforced by hooks in the runtime as the work happens, so your AI can't fake the work.
 </p>
 
 <p align="center">
