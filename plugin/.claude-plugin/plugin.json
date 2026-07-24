@@ -2,7 +2,7 @@
   "name": "team-management",
   "displayName": "team.management",
   "version": "0.4.3",
-  "description": "Your AI says it's done — and a more capable model only says it more convincingly. team.management is an open-source protocol engine for Claude Code that puts your AI on rails it can't leave: it blocks the shortcuts, shows the work, and hands you the proof. Free, and it runs on the subscription you already pay for.",
+  "description": "An open-source Claude Code plugin that puts every process on rails — the steps are enforced by hooks in the runtime as the work happens, so your AI can't fake the work.",
   "author": { "name": "Team Management" },
   "homepage": "https://github.com/TeamManagementPlugin/claude-plugin",
   "repository": "https://github.com/TeamManagementPlugin/claude-plugin",
