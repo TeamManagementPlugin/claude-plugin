@@ -1,0 +1,77 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+# Least privilege by default; the release job opts up to write for tagging.
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # The suite is hermetic: tests self-manage sys.path + env vars and mock the
+      # network. It needs only pytest + requests (the mcp/tiktoken runtime deps are
+      # optional imports the tests stub or skip), so we skip the hashed runtime lock.
+      - name: Install test dependencies
+        run: python -m pip install --upgrade pip pytest requests
+      - name: Run test suite
+        run: python -m pytest test/ -q
+
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Check release integrity (manifests valid + versions in sync)
+        run: python .github/scripts/check_release_integrity.py
+
+  release:
+    needs: [test, validate]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    concurrency:
+      group: release
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Tag and release when the plugin version has no tag yet
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="$(python -c "import json; print(json.load(open('plugin/.claude-plugin/plugin.json'))['version'])")"
+          tag="v${version}"
+          if git ls-remote --exit-code --tags origin "refs/tags/${tag}" >/dev/null 2>&1; then
+            # Tag already exists. A prior run may have pushed the tag but failed before
+            # creating the Release, so backfill the Release if it is missing.
+            if gh release view "${tag}" >/dev/null 2>&1; then
+              echo "Tag ${tag} and its Release already exist — nothing to do."
+            else
+              echo "Tag ${tag} exists but has no Release — backfilling the Release."
+              gh release create "${tag}" --title "${tag}" --generate-notes
+            fi
+            exit 0
+          fi
+          echo "Creating ${tag}…"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "${tag}" -m "Release ${tag}"
+          git push origin "${tag}"
+          gh release create "${tag}" --title "${tag}" --generate-notes
