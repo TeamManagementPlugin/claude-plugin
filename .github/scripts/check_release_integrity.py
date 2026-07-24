@@ -55,6 +55,13 @@ def load_json(path: Path):
 plugin = load_json(PLUGIN_JSON)
 market = load_json(MARKETPLACE_JSON)
 
+# Valid JSON that is not an object (a top-level array or scalar) would otherwise
+# skip every check below and pass silently — hard-fail instead.
+if plugin is not None and not isinstance(plugin, dict):
+    errors.append(f"{_rel(PLUGIN_JSON)}: expected a JSON object")
+if market is not None and not isinstance(market, dict):
+    errors.append(f"{_rel(MARKETPLACE_JSON)}: expected a JSON object")
+
 version = None
 if isinstance(plugin, dict):
     for field in ("name", "version"):
