@@ -50,7 +50,7 @@ Then enable it for the project and restart Claude Code:
 /team-management:init
 ```
 
-On **Windows**, `/team-management:init` is required, not optional — it provisions the `python3` command the hooks need. See **[docs/INSTALL.md](docs/INSTALL.md)** for prerequisites, Windows setup, team enablement, and uninstall.
+On **Windows**, `/team-management:init` is required, not optional — it provisions the `python3` command the hooks need (skip it and the hooks fail to load with `python3: command not found`). See **[docs/INSTALL.md](docs/INSTALL.md)** for prerequisites, Windows setup, team enablement, and uninstall.
 
 ## How it works
 

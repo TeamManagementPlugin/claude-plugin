@@ -50,12 +50,14 @@ class _TempEngineBase(TestCase):
         self._orig_project_root = shared_state.PROJECT_ROOT
         self._orig_state_dir = shared_state.STATE_DIR
         self._orig_task_state_file = shared_state.TASK_STATE_FILE
+        self._orig_task_state_lock_file = shared_state.TASK_STATE_LOCK_FILE
         self._orig_daic_state_file = shared_state.DAIC_STATE_FILE
         self._orig_protocol_logs_dir = shared_state.PROTOCOL_LOGS_DIR
 
         shared_state.PROJECT_ROOT = self.temp_dir
         shared_state.STATE_DIR = self.temp_dir / ".claude" / "state"
         shared_state.TASK_STATE_FILE = self.temp_dir / ".claude" / "state" / "current_task.json"
+        shared_state.TASK_STATE_LOCK_FILE = self.temp_dir / ".claude" / "state" / "current_task.lock"
         shared_state.DAIC_STATE_FILE = self.temp_dir / ".claude" / "state" / "daic-mode.json"
         shared_state.PROTOCOL_LOGS_DIR = self.temp_dir / ".claude" / "state" / "protocol-logs"
 
@@ -65,6 +67,7 @@ class _TempEngineBase(TestCase):
         shared_state.PROJECT_ROOT = self._orig_project_root
         shared_state.STATE_DIR = self._orig_state_dir
         shared_state.TASK_STATE_FILE = self._orig_task_state_file
+        shared_state.TASK_STATE_LOCK_FILE = self._orig_task_state_lock_file
         shared_state.DAIC_STATE_FILE = self._orig_daic_state_file
         shared_state.PROTOCOL_LOGS_DIR = self._orig_protocol_logs_dir
         shutil.rmtree(self.temp_dir, ignore_errors=True)
