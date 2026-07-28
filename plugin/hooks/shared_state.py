@@ -270,6 +270,9 @@ def ensure_agy_readonly_gate_deployed(project_root, plugin_root):
             return False
         agents_dir = Path(project_root) / '.agents'
         agents_dir.mkdir(parents=True, exist_ok=True)
+        # Keep the plugin-generated gate out of the host project's VCS (mirrors
+        # `.claude/`); runs on every deploy incl. no-op/already-current calls.
+        ensure_agents_dir_gitignored(project_root)
         # 1. Deploy the gate script (refresh-on-change; plugin-owned, replaced on update).
         _refresh_file_if_changed(src, agents_dir / _AGY_GATE_SCRIPT)
         # 2. Merge our named hook into hooks.json without clobbering user hooks.
@@ -675,6 +678,48 @@ def ensure_claude_dir_gitignored(project_root):
         out = '\n'.join(kept)
         sep = '' if (not out or out.endswith('\n')) else '\n'
         gi.write_text(f'{out}{sep}{entry}\n', encoding='utf-8')
+    except Exception:
+        return  # best-effort; never break the caller
+
+
+def ensure_agents_dir_gitignored(project_root):
+    """Ensure the whole `.agents/` directory is git-ignored (best-effort).
+
+    `.agents/` holds the agy read-only deny-gate the plugin deploys
+    (`agy-readonly-gate.py` + a merge-aware `hooks.json`) whenever agy is an
+    enabled provider. It is plugin-generated runtime config, redeployed
+    (refresh-on-change) on every session-start, so it should never be tracked --
+    same rationale as `.claude/` (see `ensure_claude_dir_gitignored`). Unlike
+    `.claude/`, `.agents/hooks.json` is merge-aware and MAY carry a user's own agy
+    hooks; ignoring the whole dir hides those too (an accepted trade-off, chosen
+    to match the `.claude/` model). The agent cannot edit `.gitignore` during a
+    protocol (not on the DAIC admin whitelist), so this runs from a hook / the MCP
+    server, which are OUTSIDE DAIC enforcement. Idempotent: a no-op when a blanket
+    `.agents/`-style rule is already present. No legacy migration (`.agents/` has
+    no legacy narrow variants). Best-effort, never raises.
+
+    Known limitation (same as `ensure_claude_dir_gitignored`): a `.gitignore`
+    entry does NOT untrack files already committed -- a project that committed
+    `.agents/` before this fix must `git rm --cached` it manually.
+    """
+    try:
+        entry = '.agents/'
+        # Lines that already ignore the WHOLE `.agents/` dir (all four spellings).
+        covering = {'.agents/', '/.agents/', '.agents', '/.agents'}
+        gi = Path(project_root) / '.gitignore'
+        existing = ''
+        if gi.exists():
+            try:
+                existing = gi.read_text(encoding='utf-8')
+            except (OSError, UnicodeError):
+                return  # cannot read -- do not risk clobbering
+        # rstrip (git strips trailing ws but keeps leading); skip comments.
+        nonblank = [ln.rstrip() for ln in existing.splitlines()
+                    if ln.rstrip() and not ln.rstrip().startswith('#')]
+        if any(s in covering for s in nonblank):
+            return  # whole `.agents/` already ignored
+        sep = '' if (not existing or existing.endswith('\n')) else '\n'
+        gi.write_text(f'{existing}{sep}{entry}\n', encoding='utf-8')
     except Exception:
         return  # best-effort; never break the caller
 

@@ -107,6 +107,54 @@ class DeployGate(unittest.TestCase):
                          (PLUGIN_ROOT / "templates" / SCRIPT).read_bytes(),
                          "stale script refreshed to source")
 
+    # --- .agents/ gitignore-on-deploy (m-fix-agy-gitignore-agents-dir) ---
+    def _gitignore_lines(self):
+        gi = self.tmp / ".gitignore"
+        text = gi.read_text(encoding="utf-8") if gi.exists() else ""
+        return [ln.rstrip() for ln in text.splitlines() if ln.rstrip()]
+
+    def test_deploy_gitignores_agents_dir(self):
+        shared_state.ensure_agy_readonly_gate_deployed(self.tmp, PLUGIN_ROOT)
+        self.assertIn(".agents/", self._gitignore_lines(),
+                      ".agents/ added to project .gitignore on deploy")
+
+    def test_gitignore_idempotent_on_second_deploy(self):
+        shared_state.ensure_agy_readonly_gate_deployed(self.tmp, PLUGIN_ROOT)
+        shared_state.ensure_agy_readonly_gate_deployed(self.tmp, PLUGIN_ROOT)
+        self.assertEqual(self._gitignore_lines().count(".agents/"), 1,
+                         "no duplicate .agents/ line across repeated deploys")
+
+    def test_gitignore_preserves_other_lines(self):
+        (self.tmp / ".gitignore").write_text("node_modules/\n", encoding="utf-8")
+        shared_state.ensure_agy_readonly_gate_deployed(self.tmp, PLUGIN_ROOT)
+        lines = self._gitignore_lines()
+        self.assertIn("node_modules/", lines)
+        self.assertIn(".agents/", lines)
+
+    def test_gitignore_recognizes_blanket_no_slash(self):
+        (self.tmp / ".gitignore").write_text(".agents\n", encoding="utf-8")
+        shared_state.ensure_agy_readonly_gate_deployed(self.tmp, PLUGIN_ROOT)
+        lines = self._gitignore_lines()
+        self.assertIn(".agents", lines)
+        self.assertNotIn(".agents/", lines)  # already covered → no duplicate append
+
+    def test_gitignore_recognizes_leading_slash_forms(self):
+        # SC#2: a pre-existing blanket rule in ANY of the four covering forms is
+        # left untouched. `.agents/` and `.agents` are exercised above; cover the
+        # two root-anchored spellings directly (not just by analogy to `.claude/`).
+        for form in ("/.agents/", "/.agents"):
+            with self.subTest(form=form):
+                (self.tmp / ".gitignore").write_text(form + "\n", encoding="utf-8")
+                shared_state.ensure_agy_readonly_gate_deployed(self.tmp, PLUGIN_ROOT)
+                lines = self._gitignore_lines()
+                self.assertIn(form, lines)
+                self.assertNotIn(".agents/", lines)  # already covered → not appended
+
+    def test_none_plugin_root_writes_no_gitignore(self):
+        shared_state.ensure_agy_readonly_gate_deployed(self.tmp, None)
+        self.assertFalse((self.tmp / ".gitignore").exists(),
+                         "None plugin_root is a no-op → no spurious .gitignore")
+
 
 class GateIsDeployed(unittest.TestCase):
     def setUp(self):
