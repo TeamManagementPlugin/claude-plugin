@@ -26,7 +26,7 @@ The framework includes persistent task management with git branch enforcement, c
 - `plugin/hooks/config_intent_gate.py` - Deterministic intent-gate hook routing config edits through the sanctioned flow
 - `plugin/agents/codex-cli.md` - Wrapper agent that runs `codex review --uncommitted` / `codex exec -s read-only` in a sandboxed Task
 - `plugin/agents/agy-cli.md` - Wrapper agent that runs `agy --add-dir "$PWD" --dangerously-skip-permissions --print-timeout 300s -p ...` (NO `--sandbox`) in a Task, contained by a project-local `.agents/hooks.json` read-only deny-gate
-- `plugin/templates/agy-readonly-gate.py` - Stdlib PreToolUse deny-gate deployed into a project's `.agents/hooks.json` (named hook `team-management-readonly-gate`); hard-`deny`s every agy tool call outside a read-only allowlist. Deployed by `shared_state.ensure_agy_readonly_gate_deployed` (merge-aware, refresh-on-change) when agy is enabled
+- `plugin/templates/agy-readonly-gate.py` - Stdlib PreToolUse deny-gate deployed into a project's `.agents/hooks.json` (named hook `team-management-readonly-gate`); hard-`deny`s every agy tool call outside a read-only allowlist. Deployed by `shared_state.ensure_agy_readonly_gate_deployed` (merge-aware, refresh-on-change) when agy is enabled; the deploy also blanket-gitignores `.agents/` in the host project (`ensure_agents_dir_gitignored`, mirroring `.claude/`)
 
 ### Core Framework
 - `plugin/mcp/server.py` - MCP server entry point (imports and tool registration only)
