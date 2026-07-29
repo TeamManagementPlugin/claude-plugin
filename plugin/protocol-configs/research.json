@@ -11,7 +11,7 @@
             "post_funcs_stop_on_failure": true,
             "advance_args": ["task", "task_content"],
             "start": "@sub-protocols/research-scoping.md",
-            "end": "Research question is clearly defined with type classification, scope boundaries, and time box. You have composed the complete research task file content with frontmatter (branch: none, research_type, time_box, decision_for) and sections (Research Question, Scope, Findings, Recommendation). Deliver it WRITE-FILE-FIRST for substantial files: write the markdown to team-management/tasks/r-<name>.md, then advance with an empty task_content — args: {\"task\": \"r-<name>\", \"task_content\": \"\"}. Small files may pass the full markdown inline as task_content. Keep the args object small and emit the call bare."
+            "end": "Advance when:\n- [ ] Research question clearly defined with type classification, scope boundaries, and time box.\n- [ ] Complete research task file content composed: frontmatter (branch: none, research_type, time_box, decision_for) and sections (Research Question, Scope, Findings, Recommendation).\n- [ ] Delivered WRITE-FILE-FIRST for substantial files: write the markdown to team-management/tasks/r-<name>.md, then advance with an empty task_content — args: {\"task\": \"r-<name>\", \"task_content\": \"\"} (small files may pass the full markdown inline). Keep the args object small and emit the call bare."
         },
         {
             "name": "exploration",
@@ -19,14 +19,14 @@
             "mode": "discussion",
             "pre_funcs": ["resolve_ai_providers_for_exploration"],
             "start": "@sub-protocols/research-exploration.md",
-            "end": "All investigation avenues have been explored. Key findings are documented via protocol_save_note(). You have enough evidence to write a synthesis document. If exploration revealed the need for production code, discuss with the user whether to complete this research first and start a task protocol, or abort and switch."
+            "end": "Advance when:\n- [ ] All investigation avenues have been explored.\n- [ ] Key findings are documented via protocol_save_note().\n- [ ] Enough evidence gathered to write a synthesis document.\n- [ ] If exploration revealed the need for production code: discussed with the user whether to complete this research first and start a task protocol, or abort and switch."
         },
         {
             "name": "synthesis",
             "description": "Write findings document, comparison matrices, decision records",
             "mode": "documentation",
             "start": "Write up the research findings in the task file.\n\nSCOPE OF THIS STEP: Documentation only. Write the findings, analysis, and recommendations into the task file's ## Findings and ## Recommendation sections.\n\n1. Populate the ## Findings section with structured evidence from the exploration phase.\n2. For evaluations: create comparison matrices or decision tables.\n3. For architecture analysis: document trade-offs, constraints, and recommended approach.\n4. For spikes/PoCs: document what was learned, what worked, what didn't.\n5. Write the ## Recommendation section with a clear conclusion.\n6. If follow-up implementation tasks are needed, list them under ### Follow-Up Tasks.\n7. Update the work log with a synthesis summary entry.\n\nDocumentation mode allows editing task files and CLAUDE.md files but blocks source code edits.",
-            "end": "Findings document is complete with structured evidence, analysis, and a clear recommendation. Follow-up tasks are listed if applicable. Work log is updated."
+            "end": "Advance when:\n- [ ] Findings document is complete with structured evidence, analysis, and a clear recommendation.\n- [ ] Follow-up tasks are listed if applicable.\n- [ ] Work log is updated."
         },
         {
             "name": "conclusion",
@@ -35,7 +35,7 @@
             "post_funcs": ["archive_task", "update_issue_status", "cleanup_task_scoped_state", "clear_task_state"],
             "post_funcs_stop_on_failure": false,
             "start": "@sub-protocols/research-conclusion.md",
-            "end": "User has reviewed findings and explicitly confirmed the research is complete. Upon calling protocol_advance, the engine automatically handles: archiving the research task file, updating issue status (if enabled), cleaning up task-scoped state, and clearing task state."
+            "end": "Advance when:\n- [ ] User has reviewed findings and explicitly confirmed the research is complete.\nOn advance the engine automatically handles: archiving the research task file, updating issue status (if enabled), cleaning up task-scoped state, and clearing task state."
         }
     ]
 }

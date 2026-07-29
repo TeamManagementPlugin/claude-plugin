@@ -59,7 +59,8 @@ def register_tools(mcp):
                   instead of creating from scratch. Pass empty task_content in
                   protocol_advance to keep your on-disk task file — the engine
                   re-validates it (frontmatter / status / prefix / branch /
-                  ## Success Criteria) instead of overwriting.
+                  ## Success Criteria / no unresolved NEEDS-CLARIFICATION
+                  markers) instead of overwriting.
             resume_force_safe: When the protocol is already active with
                   loop_iteration > 0 (optimize protocols), start_protocol
                   auto-resumes after a credential-pattern scan. Set this

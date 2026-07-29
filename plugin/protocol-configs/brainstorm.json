@@ -11,14 +11,14 @@
             "post_funcs_stop_on_failure": true,
             "advance_args": ["task", "branch", "task_content"],
             "start": "@sub-protocols/brainstorm-topic.md",
-            "end": "Topic is clearly defined with initial scope. You have composed the complete brainstorm task file content with frontmatter (task: b-brainstorm-<name>, branch: brainstorm/<name>) and all required sections. Pass args: {\"task\": \"b-brainstorm-<name>\", \"branch\": \"brainstorm/<name>\", \"task_content\": \"<full markdown>\"} to protocol_advance."
+            "end": "Advance when:\n- [ ] Topic is clearly defined with initial scope.\n- [ ] Complete brainstorm task file content composed: frontmatter (task: b-brainstorm-<name>, branch: brainstorm/<name>) plus all required sections.\n- [ ] Pass args: {\"task\": \"b-brainstorm-<name>\", \"branch\": \"brainstorm/<name>\", \"task_content\": \"<full markdown>\"} to protocol_advance."
         },
         {
             "name": "discussion",
             "description": "Deep discussion recording decisions, also serves as conflict resolution step",
             "mode": "documentation",
             "start": "@sub-protocols/brainstorm-discussion.md",
-            "end": "All open questions and conflicts are resolved. Every decision is recorded in the task file's ## Decisions section with checkboxes. The user confirms readiness to proceed to multi-perspective analysis. If returning from analysis with conflicts, all conflicts have been resolved and decisions updated."
+            "end": "Advance when:\n- [ ] All open questions and conflicts are resolved.\n- [ ] Every decision is recorded in the task file's ## Decisions section with checkboxes.\n- [ ] The user confirms readiness to proceed to multi-perspective analysis.\n- [ ] If returning from analysis with conflicts: all conflicts resolved and decisions updated."
         },
         {
             "name": "analysis",
@@ -26,14 +26,14 @@
             "mode": "documentation",
             "pre_funcs": ["resolve_ai_providers_for_brainstorm"],
             "start": "@sub-protocols/brainstorm-analysis.md",
-            "end": "After agents complete: document results in ## Expert Analysis sections. If conflicts exist between experts, document in ## Conflicts and call protocol_goto(step_name=\"discussion\"). If no conflicts, all sections are freshly populated and you may advance to results."
+            "end": "After agents complete:\n- [ ] Results documented in the ## Expert Analysis sections — all sections freshly populated.\n- [ ] If conflicts exist between experts: document them in ## Conflicts and call protocol_goto(step_name=\"discussion\") instead of advancing.\n- [ ] No conflicts remain → advance to results."
         },
         {
             "name": "results",
             "description": "Generate results document and get user approval",
             "mode": "documentation",
             "start": "@sub-protocols/brainstorm-results.md",
-            "end": "Results document is written to docs/brainstorm-results/<name>.md with all required sections. You presented 3 task granularity options (minimal/balanced/fine-grained) with concrete task lists, user chose one, and the Implementation Plan section is added to the results document. User has reviewed and approved the complete document. If changes needed, use protocol_goto to go back. Ready to proceed to task creation."
+            "end": "Advance when:\n- [ ] Results document written to docs/brainstorm-results/<name>.md with all required sections.\n- [ ] 3 task granularity options (minimal/balanced/fine-grained) presented with concrete task lists, and the user chose one.\n- [ ] The Implementation Plan section is added to the results document.\n- [ ] User has reviewed and approved the complete document — use protocol_goto to go back if changes are needed."
         },
         {
             "name": "planning",
@@ -43,7 +43,7 @@
             "post_funcs": ["require_discard_confirmation", "completion_dispatch"],
             "post_funcs_stop_on_failure": true,
             "start": "@sub-protocols/brainstorm-planning.md",
-            "end": "Task files are created per the approved Implementation Plan from the results step. The Section 2 coverage audit is complete — every recorded decision, feature detail, in-scope item, and dead-code entry maps to a created task or an explicit waiver — and the ## Task Coverage matrix is written to the results document. User has confirmed both the created tasks and the coverage. Upon calling protocol_advance, the engine automatically handles completion. When issue_tracking.provider is 'disabled', the user picks a completion_option from the menu presented on step entry (merge_local / push_pr / keep / discard). Pass args: {\"completion_option\": \"<option>\"} when provider is disabled."
+            "end": "Advance when:\n- [ ] Task files are created per the approved Implementation Plan from the results step.\n- [ ] Section 2 coverage audit complete — every recorded decision, feature detail, in-scope item, and dead-code entry maps to a created task or an explicit waiver; the ## Task Coverage matrix is written to the results document.\n- [ ] User has confirmed both the created tasks and the coverage.\nOn advance the engine automatically handles completion. When issue_tracking.provider is 'disabled', the user picks a completion_option from the menu presented on step entry — pass args: {\"completion_option\": \"<merge_local|push_pr|keep|discard>\"}."
         }
     ]
 }

@@ -2,7 +2,7 @@
 title: Completion and Git Flow
 tags: [git, issue-tracking, protocols]
 created: 2026-05-31
-updated: 2026-07-15
+updated: 2026-07-29
 sources: [plugin/hooks/optimize_completion.py, plugin/hooks/protocol_engine.py, plugin/protocol-configs/sub-protocols/task-completion.md, plugin/hooks/git_operations.py, plugin/mcp/tools/git_operations.py]
 ---
 
@@ -33,6 +33,10 @@ The completion step is the last step of any protocol that ends in git work (`tas
 1. **Optimize short-circuit**: if the active protocol is `optimize` / `optimize-unattended`, hand off to `_completion_optimize` before anything else.
 2. **Provider-driven chain**: if `source != "configured"` or `provider != "disabled"`, run the 9-func chain via `_run_completion_chain("provider", …)`: `archive_task → git_commit → git_merge_main → git_push → create_merge_request → update_issue_status → cleanup_task_scoped_state → clear_task_state → checkout_default_branch`. This is byte-for-byte the old behaviour. `_run_completion_chain` stops at the first sub-func failure and returns it. **No-remote safety** (m-fix-completion-strands-without-remote): `_func_git_merge_main` and `_func_git_push` (in `protocol_engine.py`) probe for an `origin` remote via `_origin_remote_exists()` and return `{success: True, action: "skipped"}` in a local-only repo instead of hard-failing on `git fetch origin` / `git push origin` (which stranded the chain — committed + archived, never merged/cleaned). The probe skips ONLY on a demonstrably-absent origin: a failed `git remote` query (rc≠0 / not-a-repo / git missing) returns True so the fetch/push still runs and surfaces the real error.
 3. **Disabled-menu dispatch** (onward): require `completion_option`; enforce the branch-safety precondition; route to one of the four `_completion_*` helpers.
+
+### archive_task — status flip on archive
+
+`_func_archive_task` (`protocol_engine.py`) is the first func of every archiving chain above. Besides moving the task file (or directory) to `team-management/tasks/done/`, it flips the frontmatter to `status: completed` and inserts a paired `completed: YYYY-MM-DD` line (after `started:`, falling back to after `created:`, else at frontmatter end; duplicate-safe) via the best-effort static helper `_mark_task_file_completed in protocol_engine.py`. The helper never raises (`except (OSError, ValueError)`), matches frontmatter delimiters as whole lines (`^---\s*$`) and only unindented top-level keys — a file without parseable frontmatter is still archived, with `status_updated: false` in the result (the key is additive; chains gate on `success` only). The already-archived idempotent retry branch repairs a stale `status:` in the `done/` copy the same way. Mirrors the `_func_update_task_status in protocol_engine.py` convention (in-progress + `started:`), with deliberately stricter parsing than that sibling.
 
 ### Branch-safety precondition
 

@@ -556,7 +556,7 @@ class ProtocolEngine(OptimizeCompletionMixin, AIProvidersMixin):
             },
             {
                 "name": "create_task_file",
-                "description": "Create/validate the task markdown file. Pass full markdown inline for small files, OR (preferred for substantial files) write the file to team-management/tasks/ first and pass task_content=\"\" — the empty-content path re-validates the on-disk file (frontmatter/status/prefix/branch/## Success Criteria) instead of trusting existence.",
+                "description": "Create/validate the task markdown file. Pass full markdown inline for small files, OR (preferred for substantial files) write the file to team-management/tasks/ first and pass task_content=\"\" — the empty-content path re-validates the on-disk file (frontmatter/status/prefix/branch/## Success Criteria/no unresolved NEEDS-CLARIFICATION markers) instead of trusting existence.",
                 "typical_usage": "post_func",
                 "required_args": ["task", "task_content"],
                 "optional_args": ["branch"],
@@ -2413,6 +2413,14 @@ class ProtocolEngine(OptimizeCompletionMixin, AIProvidersMixin):
             errors.append(
                 "Task file missing required section: ## Success Criteria. Include measurable success criteria in the task content."
             )
+        # Drafting-only clarification markers must be resolved before delivery.
+        # \s+ (not a literal space) also keeps regex-source spellings of the
+        # pattern itself from self-matching when quoted in a task file.
+        if re.search(r"\[NEEDS\s+CLARIFICATION", body_text, re.IGNORECASE):
+            errors.append(
+                "Task file contains unresolved NEEDS-CLARIFICATION markers. Resolve every marker "
+                "with the user (or record the accepted unknown in ## User Notes) before delivering the task file."
+            )
         return errors
 
     def _func_create_task_file(self, args: Dict = None) -> Dict:
@@ -3613,8 +3621,70 @@ class ProtocolEngine(OptimizeCompletionMixin, AIProvidersMixin):
             # Non-fatal: issue status update failure should not block task cleanup
             return {"func": "update_issue_status", "success": True, "warning": str(e)}
 
+    @staticmethod
+    def _mark_task_file_completed(task_file: Path) -> bool:
+        """Best-effort frontmatter rewrite for an archived task: set
+        `status: completed` and add a paired `completed: <today>` date line
+        (mirrors _func_update_task_status setting in-progress + started:).
+
+        Returns True when the file was rewritten, False otherwise. Never
+        raises — archiving is the load-bearing operation and must not be
+        blocked by a malformed/unreadable task file.
+        """
+        try:
+            content = task_file.read_text(encoding="utf-8")
+            lines = content.split("\n")
+            # Delimiters must be whole lines ("---"), never substrings — a
+            # "---" inside a value must not close the frontmatter. Keys must
+            # be unindented top-level keys (an indented "status:" inside a
+            # block scalar is content, not metadata).
+            if not lines or not re.match(r"^---\s*$", lines[0]):
+                return False
+            close_idx = next(
+                (i for i in range(1, len(lines)) if re.match(r"^---\s*$", lines[i])),
+                None,
+            )
+            if close_idx is None:
+                return False
+
+            updated_lines = []
+            has_status = False
+            has_completed = False
+            for line in lines[1:close_idx]:
+                if re.match(r"^status:", line):
+                    updated_lines.append("status: completed")
+                    has_status = True
+                else:
+                    if re.match(r"^completed:", line):
+                        has_completed = True
+                    updated_lines.append(line)
+            if not has_status:
+                return False
+
+            if not has_completed:
+                today = datetime.now().strftime("%Y-%m-%d")
+                for anchor in (r"^started:", r"^created:"):
+                    idx = next(
+                        (i for i, ln in enumerate(updated_lines) if re.match(anchor, ln)),
+                        None,
+                    )
+                    if idx is not None:
+                        updated_lines.insert(idx + 1, f"completed: {today}")
+                        break
+                else:
+                    updated_lines.append(f"completed: {today}")
+
+            task_file.write_text(
+                "\n".join([lines[0]] + updated_lines + lines[close_idx:]),
+                encoding="utf-8",
+            )
+            return True
+        except (OSError, ValueError):
+            return False
+
     def _func_archive_task(self, args: Dict = None) -> Dict:
-        """Move completed task file to tasks/done/."""
+        """Move completed task file to tasks/done/, flipping its frontmatter
+        status to completed (best-effort) on the way."""
         task_state = get_task_state()
         task_name = task_state.get("task")
         if not task_name:
@@ -3624,6 +3694,7 @@ class ProtocolEngine(OptimizeCompletionMixin, AIProvidersMixin):
         tasks_dir = self.project_root / "team-management" / "tasks"
         task_file = tasks_dir / f"{task_name}.md"
         if task_file.exists():
+            status_updated = self._mark_task_file_completed(task_file)
             done_dir = tasks_dir / "done"
             done_dir.mkdir(parents=True, exist_ok=True)
             dest = done_dir / f"{task_name}.md"
@@ -3632,6 +3703,7 @@ class ProtocolEngine(OptimizeCompletionMixin, AIProvidersMixin):
                 "func": "archive_task",
                 "success": True,
                 "task": task_name,
+                "status_updated": status_updated,
                 "from": str(task_file.relative_to(self.project_root)),
                 "to": str(dest.relative_to(self.project_root)),
             }
@@ -3639,6 +3711,7 @@ class ProtocolEngine(OptimizeCompletionMixin, AIProvidersMixin):
         # Check directory task
         task_dir = tasks_dir / task_name
         if task_dir.exists() and task_dir.is_dir():
+            status_updated = self._mark_task_file_completed(task_dir / "README.md")
             done_dir = tasks_dir / "done"
             done_dir.mkdir(parents=True, exist_ok=True)
             dest = done_dir / task_name
@@ -3647,17 +3720,23 @@ class ProtocolEngine(OptimizeCompletionMixin, AIProvidersMixin):
                 "func": "archive_task",
                 "success": True,
                 "task": task_name,
+                "status_updated": status_updated,
                 "from": str(task_dir.relative_to(self.project_root)),
                 "to": str(dest.relative_to(self.project_root)),
             }
 
-        # Check if already archived (idempotent — previous attempt may have archived before failing later)
+        # Check if already archived (idempotent — previous attempt may have
+        # archived before failing later). A retry also repairs a stale
+        # status left by a prior attempt that moved the file but died
+        # before/without the frontmatter rewrite.
         done_file = tasks_dir / "done" / f"{task_name}.md"
         if done_file.exists():
-            return {"func": "archive_task", "success": True, "task": task_name, "already_archived": True, "message": "Task already in done/."}
+            status_updated = self._mark_task_file_completed(done_file)
+            return {"func": "archive_task", "success": True, "task": task_name, "already_archived": True, "status_updated": status_updated, "message": "Task already in done/."}
         done_dir = tasks_dir / "done" / task_name
         if done_dir.exists() and done_dir.is_dir():
-            return {"func": "archive_task", "success": True, "task": task_name, "already_archived": True, "message": "Task already in done/."}
+            status_updated = self._mark_task_file_completed(done_dir / "README.md")
+            return {"func": "archive_task", "success": True, "task": task_name, "already_archived": True, "status_updated": status_updated, "message": "Task already in done/."}
 
         return {"func": "archive_task", "success": False, "error": f"Task file not found for '{task_name}'."}
 

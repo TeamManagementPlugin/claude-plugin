@@ -32,7 +32,7 @@ Everything else you can discover on your own via the tools below.
 
 ## Procedure
 
-1. **Read the task file.** Extract the `## Success Criteria` list verbatim. Each bullet is a claim the diff must satisfy.
+1. **Read the task file.** Extract the `## Success Criteria` list verbatim (the short form `## Criteria` counts too). Each bullet is a claim the diff must satisfy. **When criteria carry stable IDs** (`SC-1:`, `SC-2:`, …), key the whole audit — mapping, Coverage lines, Rationale — on those IDs. **When they don't** (legacy/imported tasks), fall back to quoting each criterion's text verbatim; do not invent IDs the task file does not have.
 2. **Get the diff AND untracked files:**
    ```bash
    git --no-pager diff HEAD                      # modified tracked files (working tree)
@@ -61,9 +61,12 @@ Everything else you can discover on your own via the tools below.
 PASS | FAIL
 
 ## Coverage
-- [x] <criterion text> — covered by `<path>:<line>` (hunk summary)
-- [ ] <criterion text> — NOT COVERED
+- [x] SC-1 — covered by `<path>:<line>` (hunk summary)
+- [ ] SC-2 — NOT COVERED
 - ...
+<!-- For tasks without SC IDs, replace the ID with the criterion text verbatim:
+- [x] <criterion text> — covered by `<path>:<line>` (hunk summary) -->
+
 
 ## Scope Creep
 - `<path>` — <one-line reason this change isn't required by any criterion>

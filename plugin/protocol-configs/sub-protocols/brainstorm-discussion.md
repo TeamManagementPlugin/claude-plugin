@@ -24,8 +24,8 @@ Systematically explore the topic with the user:
 
 Three-step procedure — apply it every time, not just for «big» topics:
 
-1. **Compose the backlog up front.** Before asking any clarifying question, draft a `TodoWrite` list of every question you want answered across the dimensions above. Seeing them together exposes redundancy («two of these collapse into one») and ordering («X depends on Y — ask Y first»).
-2. **Ask via `AskUserQuestion`, strictly one question per call.** Use 2-4 options per question with a short `header` (≤12 chars) and `multiSelect: false` unless choices are not mutually exclusive. The tool auto-appends an «Other» option for free-text — do not add it manually. Use plain free-text in chat (no widget) only when valid options are unknowable in advance or prose is the answer (e.g. «describe the bug you're hitting»).
+1. **Compose the backlog up front.** Before asking any clarifying question, draft a `TodoWrite` list of every question you want answered across the dimensions above, plus the cross-cutting ambiguity checklist: edge cases / failure modes, non-functional requirements (performance, security, compatibility), terminology / data definitions, integration points. Seeing them together exposes redundancy («two of these collapse into one») and ordering («X depends on Y — ask Y first»). Then prioritize by **Impact × Uncertainty** — ask first where a wrong guess is most expensive AND your own confidence is lowest. **Cap: at most 5 widget questions per discussion round.** Close the remaining low-impact items as reasonable defaults recorded under `## Decisions` — the cap limits questions asked, not the zero-ambiguity end state.
+2. **Ask via `AskUserQuestion`, strictly one question per call — recommendation first.** For every option-based question, the prose context BEFORE the widget must contain a line `Recommendation: <option> — <reasoning>`, and the recommended option is listed first in `options`. You have already explored the topic — stating your position is the value you add; a bare menu outsources the thinking to the user. (Free-text questions have no options, hence no recommendation line.) Use 2-4 options per question with a short `header` (≤12 chars) and `multiSelect: false` unless choices are not mutually exclusive. The tool auto-appends an «Other» option for free-text — do not add it manually. Use plain free-text in chat (no widget) only when valid options are unknowable in advance or prose is the answer (e.g. «describe the bug you're hitting»).
 3. **After each answer, summarize what you heard and confirm with the user *before* recording the decision under `## Decisions`** (see Section 2). The summarize→confirm→record order matters — once a decision is in `## Decisions` future analysis treats it as load-bearing, so the user must catch misinterpretations *before* it's committed. After the user confirms, mark the TodoWrite item completed and move to the next question.
 
 **Field-content discipline** — the widget is the only thing the user sees while answering, so each field must stand alone:
@@ -43,6 +43,8 @@ If you anticipate the user being unsure, reserve ONE of the 2-4 option slots for
 
 ```
 ... your prose context above (what you've explored, why this choice matters now) ...
+
+Recommendation: Brainstorm only — smallest blast radius; other protocols can adopt the pattern after it proves itself here.
 
 
 

@@ -677,6 +677,103 @@ class TestCreateTaskFileValidation(ProtocolEngineTestBase):
         self.assertFalse(result["success"])
         self.assertIn("priority prefix", result["error"])
 
+    # The literal marker is assembled by concatenation so it never appears verbatim
+    # in this repo's own task files / test source (the gate would self-match it).
+    CLARIFICATION_MARKER = "[NEEDS " + "CLARIFICATION: which auth method?]"
+
+    def test_needs_clarification_marker_rejected(self):
+        """A body containing an unresolved clarification marker blocks delivery."""
+        result = self.engine._func_create_task_file(args={
+            "task": "m-test-task",
+            "branch": "feature/test",
+            "task_content": (
+                "---\nstatus: pending\nbranch: feature/test\n---\n# Test Task\n\n"
+                "## Success Criteria\n- [ ] SC-1: do X " + self.CLARIFICATION_MARKER + "\n"
+            ),
+        })
+        self.assertFalse(result["success"])
+        self.assertIn("NEEDS", result["error"])
+
+    def test_needs_clarification_case_insensitive(self):
+        """The marker check is case-insensitive."""
+        lower_marker = "[needs " + "clarification: which auth method?]"
+        result = self.engine._func_create_task_file(args={
+            "task": "m-test-task",
+            "branch": "feature/test",
+            "task_content": (
+                "---\nstatus: pending\nbranch: feature/test\n---\n# Test Task\n\n"
+                "## Success Criteria\n- [ ] SC-1: do X " + lower_marker + "\n"
+            ),
+        })
+        self.assertFalse(result["success"])
+        self.assertIn("NEEDS", result["error"])
+
+    def test_prose_mention_not_false_matched(self):
+        """Prose mentioning 'needs clarification' without the bracket marker passes."""
+        result = self.engine._func_create_task_file(args={
+            "task": "m-test-task",
+            "branch": "feature/test",
+            "task_content": (
+                "---\nstatus: pending\nbranch: feature/test\n---\n# Test Task\n\n"
+                "## Success Criteria\n- [ ] SC-1: works\n\n## User Notes\n"
+                "One point still needs clarification from the user, recorded here as accepted.\n"
+            ),
+        })
+        self.assertTrue(result["success"], result.get("error"))
+
+    def test_marker_outside_criteria_section_rejected(self):
+        """The gate scans the whole body — a marker in ## User Notes also blocks."""
+        result = self.engine._func_create_task_file(args={
+            "task": "m-test-task",
+            "branch": "feature/test",
+            "task_content": (
+                "---\nstatus: pending\nbranch: feature/test\n---\n# Test Task\n\n"
+                "## Success Criteria\n- [ ] SC-1: works\n\n## User Notes\n"
+                "Open point: " + self.CLARIFICATION_MARKER + "\n"
+            ),
+        })
+        self.assertFalse(result["success"])
+        self.assertIn("NEEDS", result["error"])
+
+    def test_marker_whitespace_variants_rejected(self):
+        """\\s+ in the pattern: newline/tab between the marker words still matches."""
+        for sep in ("\n", "\t", "  "):
+            with self.subTest(sep=repr(sep)):
+                marker = "[NEEDS" + sep + "CLARIFICATION: split marker]"
+                result = self.engine._func_create_task_file(args={
+                    "task": "m-test-task",
+                    "branch": "feature/test",
+                    "task_content": (
+                        "---\nstatus: pending\nbranch: feature/test\n---\n# Test Task\n\n"
+                        "## Success Criteria\n- [ ] SC-1: x " + marker + "\n"
+                    ),
+                })
+                self.assertFalse(result["success"])
+                self.assertIn("NEEDS", result["error"])
+
+    def test_numbered_criteria_pass(self):
+        """SC-numbered criteria are plain convention — the validator accepts them."""
+        result = self.engine._func_create_task_file(args={
+            "task": "m-test-task",
+            "branch": "feature/test",
+            "task_content": (
+                "---\nstatus: pending\nbranch: feature/test\n---\n# Test Task\n\n"
+                "## Success Criteria\n- [ ] SC-1: Something works\n- [ ] SC-2: Another outcome\n"
+            ),
+        })
+        self.assertTrue(result["success"], result.get("error"))
+
+
+class TestTemplateScNumbering(ProtocolEngineTestBase):
+    """Drift guard: the shipped task template documents the SC-numbering convention."""
+
+    def test_template_contains_sc_numbering(self):
+        template = Path(__file__).resolve().parent.parent / "plugin" / "templates" / "TEMPLATE.md"
+        content = template.read_text(encoding="utf-8")
+        self.assertIn("SC-1:", content)
+        self.assertIn("SC-2:", content)
+        self.assertIn("T1 [SC-1]", content)
+
 
 class TestCreateTaskFileSkipValidation(ProtocolEngineTestBase):
     """Skip-overwrite path (empty task_content + existing file) re-validates the
@@ -815,6 +912,43 @@ class TestCreateTaskFileSkipValidation(ProtocolEngineTestBase):
         # Both surface the same underlying validation error.
         self.assertIn("Task file missing required section: ## Success Criteria", inline["error"])
         self.assertIn("Task file missing required section: ## Success Criteria", skip["error"])
+
+    def test_needs_clarification_marker_blocks_skip_path(self):
+        """An on-disk file still carrying a clarification marker blocks the advance."""
+        marker = "[NEEDS " + "CLARIFICATION: which storage?]"
+        content = (
+            "---\ntask: m-skip-marker\nbranch: feature/skip-marker\nstatus: pending\n---\n"
+            "# Marker\n\n**Author:** Max\n\n## Success Criteria\n- [ ] SC-1: x " + marker + "\n"
+        )
+        self._write_task("m-skip-marker", content)
+        result = self.engine._func_create_task_file(args={
+            "task": "m-skip-marker", "branch": "feature/skip-marker", "task_content": "",
+        })
+        self.assertFalse(result["success"])
+        self.assertIn("NEEDS", result["error"])
+
+    def test_parity_marker_same_error(self):
+        """The marker rejection surfaces the same first error on both delivery paths."""
+        marker = "[NEEDS " + "CLARIFICATION: which storage?]"
+        content = (
+            "---\ntask: m-parity-marker\nbranch: feature/parity-marker\nstatus: pending\n---\n"
+            "# Parity Marker\n\n## Success Criteria\n- [ ] SC-1: x " + marker + "\n"
+        )
+        inline = self.engine._func_create_task_file(args={
+            "task": "m-parity-marker", "branch": "feature/parity-marker", "task_content": content,
+        })
+        self._write_task("m-parity-marker", content)
+        skip = self.engine._func_create_task_file(args={
+            "task": "m-parity-marker", "branch": "feature/parity-marker", "task_content": "",
+        })
+        self.assertFalse(inline["success"])
+        self.assertFalse(skip["success"])
+        self.assertIn("NEEDS", inline["error"])
+        self.assertIn("NEEDS", skip["error"])
+        # Same underlying validation message on both paths.
+        marker_msg = "unresolved NEEDS"
+        self.assertIn(marker_msg, inline["error"])
+        self.assertIn(marker_msg, skip["error"])
 
     def test_advance_args_allows_empty_then_func_validates(self):
         """Two-layer: _validate_advance_args allows empty task_content on existence,
