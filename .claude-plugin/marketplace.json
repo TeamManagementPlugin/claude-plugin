@@ -3,7 +3,7 @@
   "owner": { "name": "Team Management" },
   "metadata": {
     "description": "Marketplace for the team-management Claude Code plugin.",
-    "version": "0.4.3"
+    "version": "0.4.4"
   },
   "plugins": [
     {

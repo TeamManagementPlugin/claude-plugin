@@ -88,17 +88,16 @@ After code review PASSES, append results to the task work log:
 
 ## 5. Warning Enforcement Check
 
-Check if warning enforcement is enabled:
+Determine the enforcement mode — **through the MCP tool, not the config file**:
 
-If `mcp__plugin_team-management_tm__config_code_review_enforcement` tool is available:
-- Call it with the current task file content
-- Check `analysis.has_warnings`:
-  - If `false`: No warnings, proceed
-  - If warnings exist, check `enforce_warnings`:
-    - **Strict Mode** (`true`): Fix ALL warnings automatically (same as critical issues), then re-run code review. Repeat until clean pass (zero critical issues AND zero warnings).
-    - **Relaxed Mode** (`false`): Report warnings, continue automatically
+1. Call `mcp__plugin_team-management_tm__config_code_review_enforcement` with the current task file content. This is the required first step — do NOT read `team-management/config.json` (via Read, `cat`, or any other route) unless the error-only fallback below applies.
+2. On `success: true`, check `analysis.has_warnings`:
+   - If `false`: No warnings, proceed
+   - If warnings exist, check `enforce_warnings`:
+     - **Strict Mode** (`true`): Fix ALL warnings automatically (same as critical issues), then re-run code review. Repeat until clean pass (zero critical issues AND zero warnings).
+     - **Relaxed Mode** (`false`): Report warnings, continue automatically
 
-**Fallback**: Read `team-management/config.json`, check `code_review.enforce_warnings` (default: false).
+**Error-only fallback**: ONLY if the tool call itself fails (tool not registered / MCP server down) or returns `success: false`, read the single `code_review.enforce_warnings` key from `team-management/config.json` (default: false). Extract just that key — do not print or dump the rest of the file into the conversation. On this path `analysis` is unavailable — determine warning presence from the final code-review results you already collected in Section 2, then apply the same Strict/Relaxed logic.
 
 **Note**: Critical issues always block completion regardless of this setting.
 

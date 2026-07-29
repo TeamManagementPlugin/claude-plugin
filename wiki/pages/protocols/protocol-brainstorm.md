@@ -2,7 +2,7 @@
 title: brainstorm Protocol
 tags: [protocols, agents, ai-providers, daic]
 created: 2026-05-31
-updated: 2026-06-06
+updated: 2026-07-28
 sources: [plugin/protocol-configs/brainstorm.json, plugin/protocol-configs/sub-protocols/brainstorm-topic.md, plugin/protocol-configs/sub-protocols/brainstorm-discussion.md, plugin/protocol-configs/sub-protocols/brainstorm-analysis.md, plugin/protocol-configs/sub-protocols/brainstorm-results.md, plugin/protocol-configs/sub-protocols/brainstorm-planning.md]
 ---
 
@@ -29,7 +29,7 @@ Deep discussion that records every accepted decision in the task file. This step
 - No funcs; advance is gated by the `end` condition (all `[ ]` items resolved, user confirms readiness).
 
 What the LLM does (`brainstorm-discussion.md`):
-1. **Structured discussion** across functional requirements, boundaries, integration, users, constraints, priorities — using the same Question Discipline as `task` investigation (TodoWrite backlog, one `AskUserQuestion` per call, field-content discipline, output buffer). One option slot may be reserved for a "Not sure — let's discuss" choice that drops to plain prose.
+1. **Structured discussion** across functional requirements, boundaries, integration, users, constraints, priorities plus the cross-cutting ambiguity checklist (edge cases / failure modes, non-functional requirements, terminology / data definitions, integration points) — using the same Question Discipline as `task` investigation (TodoWrite backlog, Impact × Uncertainty prioritization with a max-5 widget-questions cap — remainder closed as reasonable defaults recorded under `## Decisions` — one `AskUserQuestion` per call with a `Recommendation: <option> — <reasoning>` line before every option-based widget, field-content discipline, output buffer). One option slot may be reserved for a "Not sure — let's discuss" choice that drops to plain prose.
 2. **Propose 2-3 distinct approaches with trade-offs** for any non-trivial design decision; record the chosen approach **and** the rejected alternatives under `## Decisions` (preserving rejected options documents *why* the winner won).
 3. **Record decisions immediately** with `[x]` (confirmed) / `[ ]` (still open). The order is **summarize → confirm with user → record** — once a decision is in `## Decisions`, downstream analysis treats it as load-bearing, so misinterpretations must be caught before it's committed.
 4. **On conflict-resolution re-entry** (Section 3): read `## Conflicts`, present each conflict's competing viewpoints, let the user decide, record resolutions as new `[x]` decisions, and **clear every `[ ]` item** — analysis cannot re-run with open questions.

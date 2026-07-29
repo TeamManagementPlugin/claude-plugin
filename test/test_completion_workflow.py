@@ -1091,5 +1091,209 @@ class TestNoRemoteSafety(_TempEngineBase):
         self.assertEqual(first_cmd[:3], ["git", "fetch", "origin"])
 
 
+class TestArchiveTaskStatusCompleted(_TempEngineBase):
+    """l-fix-archive-task-status-completed: archiving flips frontmatter
+    status to completed (+ paired completed: date), best-effort, on the
+    file branch, the directory branch, and the already-archived retry."""
+
+    FRONTMATTER = (
+        "---\n"
+        "task: {name}\n"
+        "branch: fix/x\n"
+        "status: in-progress\n"
+        "created: 2026-07-28\n"
+        "started: 2026-07-29\n"
+        "---\n\n# Title\n\n## Success Criteria\n- [x] SC-1: done\n"
+    )
+
+    def _set_task(self, name):
+        self._write_json(
+            self.temp_dir / ".claude" / "state" / "current_task.json",
+            {"task": name, "branch": "fix/x", "services": [], "updated": "2026-07-29"},
+        )
+
+    def test_archive_flips_status_to_completed(self):
+        name = "l-file-task"
+        task_file = self.temp_dir / "team-management" / "tasks" / f"{name}.md"
+        task_file.write_text(self.FRONTMATTER.format(name=name), encoding="utf-8")
+        self._set_task(name)
+
+        result = self.engine._func_archive_task()
+
+        self.assertTrue(result["success"])
+        self.assertTrue(result.get("status_updated"))
+        dest = self.temp_dir / "team-management" / "tasks" / "done" / f"{name}.md"
+        self.assertTrue(dest.exists())
+        content = dest.read_text(encoding="utf-8")
+        self.assertIn("status: completed", content)
+        self.assertNotIn("status: in-progress", content)
+        from datetime import datetime
+        today = datetime.now().strftime("%Y-%m-%d")
+        started_idx = content.index("started: 2026-07-29")
+        completed_idx = content.index(f"completed: {today}")
+        self.assertGreater(completed_idx, started_idx)
+        self.assertEqual(content.count("completed:"), 1)
+        self.assertIn("## Success Criteria", content)  # body preserved
+
+    def test_archive_directory_task_flips_status(self):
+        name = "l-dir-task"
+        task_dir = self.temp_dir / "team-management" / "tasks" / name
+        task_dir.mkdir(parents=True)
+        (task_dir / "README.md").write_text(
+            self.FRONTMATTER.format(name=name), encoding="utf-8"
+        )
+        self._set_task(name)
+
+        result = self.engine._func_archive_task()
+
+        self.assertTrue(result["success"])
+        self.assertTrue(result.get("status_updated"))
+        dest = self.temp_dir / "team-management" / "tasks" / "done" / name / "README.md"
+        self.assertTrue(dest.exists())
+        content = dest.read_text(encoding="utf-8")
+        self.assertIn("status: completed", content)
+        self.assertNotIn("status: in-progress", content)
+
+    def test_archive_without_frontmatter_still_archives(self):
+        name = "l-bare-task"
+        task_file = self.temp_dir / "team-management" / "tasks" / f"{name}.md"
+        task_file.write_text("# Just a title, no frontmatter\n", encoding="utf-8")
+        self._set_task(name)
+
+        result = self.engine._func_archive_task()
+
+        self.assertTrue(result["success"])
+        self.assertFalse(result.get("status_updated"))
+        dest = self.temp_dir / "team-management" / "tasks" / "done" / f"{name}.md"
+        self.assertTrue(dest.exists())
+        self.assertEqual(
+            dest.read_text(encoding="utf-8"), "# Just a title, no frontmatter\n"
+        )
+
+    def test_archive_retry_repairs_stale_status(self):
+        name = "l-stale-task"
+        done_dir = self.temp_dir / "team-management" / "tasks" / "done"
+        done_dir.mkdir(parents=True, exist_ok=True)
+        (done_dir / f"{name}.md").write_text(
+            self.FRONTMATTER.format(name=name), encoding="utf-8"
+        )
+        self._set_task(name)  # no active copy — only the done/ one
+
+        result = self.engine._func_archive_task()
+
+        self.assertTrue(result["success"])
+        self.assertTrue(result.get("already_archived"))
+        self.assertTrue(result.get("status_updated"))
+        content = (done_dir / f"{name}.md").read_text(encoding="utf-8")
+        self.assertIn("status: completed", content)
+        self.assertNotIn("status: in-progress", content)
+
+    def test_archive_frontmatter_value_with_dashes_not_premature_close(self):
+        # A "---" inside a frontmatter VALUE must not be taken as the closing
+        # delimiter (codex plan review: raw substring find corrupted the file).
+        name = "l-dashes-task"
+        task_file = self.temp_dir / "team-management" / "tasks" / f"{name}.md"
+        task_file.write_text(
+            "---\n"
+            f"task: {name}\n"
+            "note: separator --- inside a value\n"
+            "status: in-progress\n"
+            "created: 2026-07-28\n"
+            "started: 2026-07-29\n"
+            "---\n\n# Title\n\n## Success Criteria\n- [x] SC-1: done\n",
+            encoding="utf-8",
+        )
+        self._set_task(name)
+
+        result = self.engine._func_archive_task()
+
+        self.assertTrue(result["success"])
+        self.assertTrue(result.get("status_updated"))
+        dest = self.temp_dir / "team-management" / "tasks" / "done" / f"{name}.md"
+        content = dest.read_text(encoding="utf-8")
+        self.assertIn("note: separator --- inside a value\n", content)
+        self.assertIn("status: completed", content)
+        self.assertNotIn("status: in-progress", content)
+        self.assertIn("## Success Criteria", content)
+
+    def test_archive_indented_status_line_not_rewritten(self):
+        # An INDENTED "status:" (e.g. inside a YAML block scalar) is not a
+        # top-level key and must be left untouched (codex plan review).
+        name = "l-indented-task"
+        task_file = self.temp_dir / "team-management" / "tasks" / f"{name}.md"
+        task_file.write_text(
+            "---\n"
+            f"task: {name}\n"
+            "description: |\n"
+            "  status: draft\n"
+            "status: in-progress\n"
+            "created: 2026-07-28\n"
+            "started: 2026-07-29\n"
+            "---\n\n# Title\n",
+            encoding="utf-8",
+        )
+        self._set_task(name)
+
+        result = self.engine._func_archive_task()
+
+        self.assertTrue(result["success"])
+        self.assertTrue(result.get("status_updated"))
+        dest = self.temp_dir / "team-management" / "tasks" / "done" / f"{name}.md"
+        content = dest.read_text(encoding="utf-8")
+        self.assertIn("  status: draft\n", content)
+        self.assertIn("\nstatus: completed\n", content)
+        self.assertNotIn("status: in-progress", content)
+
+    def test_archive_existing_completed_line_not_duplicated(self):
+        name = "l-precompleted-task"
+        task_file = self.temp_dir / "team-management" / "tasks" / f"{name}.md"
+        task_file.write_text(
+            "---\n"
+            f"task: {name}\n"
+            "status: in-progress\n"
+            "created: 2026-07-28\n"
+            "started: 2026-07-29\n"
+            "completed: 2026-07-01\n"
+            "---\n\n# Title\n",
+            encoding="utf-8",
+        )
+        self._set_task(name)
+
+        result = self.engine._func_archive_task()
+
+        self.assertTrue(result["success"])
+        self.assertTrue(result.get("status_updated"))
+        dest = self.temp_dir / "team-management" / "tasks" / "done" / f"{name}.md"
+        content = dest.read_text(encoding="utf-8")
+        self.assertEqual(content.count("completed:"), 1)
+        self.assertIn("completed: 2026-07-01", content)  # existing date kept
+        self.assertIn("status: completed", content)
+
+    def test_archive_completed_inserted_after_created_when_no_started(self):
+        name = "l-nostarted-task"
+        task_file = self.temp_dir / "team-management" / "tasks" / f"{name}.md"
+        task_file.write_text(
+            "---\n"
+            f"task: {name}\n"
+            "status: in-progress\n"
+            "created: 2026-07-28\n"
+            "---\n\n# Title\n",
+            encoding="utf-8",
+        )
+        self._set_task(name)
+
+        result = self.engine._func_archive_task()
+
+        self.assertTrue(result["success"])
+        self.assertTrue(result.get("status_updated"))
+        dest = self.temp_dir / "team-management" / "tasks" / "done" / f"{name}.md"
+        content = dest.read_text(encoding="utf-8")
+        from datetime import datetime
+        today = datetime.now().strftime("%Y-%m-%d")
+        created_idx = content.index("created: 2026-07-28")
+        completed_idx = content.index(f"completed: {today}")
+        self.assertGreater(completed_idx, created_idx)
+
+
 if __name__ == "__main__":
     main()

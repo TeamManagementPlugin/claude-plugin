@@ -2,7 +2,7 @@
 title: Workflow Protocols
 tags: [protocols, agents, daic, ai-providers]
 created: 2026-05-31
-updated: 2026-06-06
+updated: 2026-07-28
 sources: [plugin/protocol-configs/task.json, plugin/protocol-configs/brainstorm.json, plugin/protocol-configs/research.json, plugin/protocol-configs/refactoring.json, plugin/protocol-configs/optimize.json, plugin/protocol-configs/optimize-unattended.json, plugin/protocol-configs/sub-protocols/code-review.md, plugin/hooks/shared_state.py]
 ---
 
@@ -35,6 +35,7 @@ Each config is `{name, description, steps: [...]}`. A step object carries (see `
 - `pre_funcs` — engine funcs run on step *entry* (and re-run each loop iteration for looping steps).
 - `post_funcs` — engine funcs run on `protocol_advance` *out* of the step. With `post_funcs_stop_on_failure: true`, the chain halts on the first func returning `success=False` and the protocol does **not** advance.
 - `advance_args` — argument names the caller must pass to `protocol_advance` (e.g. `task.json` requires `task`, `branch`, `task_content`).
+- `end` — the step's completion condition, formatted as a **markdown checkbox list** (1–6 `- [ ]` items with optional prose framing; completion/conclusion steps carry a single user-confirmation checkbox plus informational engine-automation lines; arg-passing instructions come last). Injected verbatim into stderr by `post-tool-use.py` (first tool call after a protocol-state change, then every 10th) and returned verbatim by the protocol MCP tools and session-start context. Format drift-guarded by `test_protocol_end_checklist.py` (line-start checkbox required per non-empty `end`, plus a no-empty-`end` companion guard).
 - `looping_step: true` — re-runs the same step instead of advancing (optimize experimentation only; see [Optimize Protocols](pages/protocols/optimize-protocols.md)).
 - `skip_notification: true` — suppresses the step-complete notification (e.g. `task.json`).
 

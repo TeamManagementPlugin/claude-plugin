@@ -8,7 +8,7 @@ Two ways to hand the composed task file to the engine:
 
 - **Write-file-first (PREFERRED for any substantial task file).** Write the full markdown directly to `team-management/tasks/<task>.md` with the Write tool (task files there are whitelisted in discussion mode), THEN advance with an **empty** `task_content`:
   `protocol_advance(args={"task": "<name>", "branch": "<branch>", "task_content": ""})`.
-  The engine re-validates the on-disk file (frontmatter / `status` / prefix / branch / `## Success Criteria`) and keeps your file as-is — it does not overwrite it. Use this whenever the file is more than a few lines: large object-typed tool args are unreliable (a multi-KB `task_content` can silently arrive empty), so keeping the `args` object tiny is the robust path. In a branch-creating protocol (e.g. `task`), `git_setup_branch` runs first and will pause with `needs_confirmation` because the pre-written file makes the tree dirty — re-run `protocol_advance` with `carry_changes: true` to carry the file onto the new branch. (Research scoping uses `branch: none`, so there is no such pause.)
+  The engine re-validates the on-disk file (frontmatter / `status` / prefix / branch / `## Success Criteria` / no unresolved NEEDS-CLARIFICATION markers) and keeps your file as-is — it does not overwrite it. Use this whenever the file is more than a few lines: large object-typed tool args are unreliable (a multi-KB `task_content` can silently arrive empty), so keeping the `args` object tiny is the robust path. In a branch-creating protocol (e.g. `task`), `git_setup_branch` runs first and will pause with `needs_confirmation` because the pre-written file makes the tree dirty — re-run `protocol_advance` with `carry_changes: true` to carry the file onto the new branch. (Research scoping uses `branch: none`, so there is no such pause.)
 - **Inline `task_content` (fine for genuinely small files).** Pass the full markdown inline:
   `protocol_advance(args={"task": "<name>", "branch": "<branch>", "task_content": "<full markdown>"})`. The engine writes the file and injects `**Author:**` if missing.
 
@@ -53,7 +53,7 @@ The AI must read `team-management/tasks/TEMPLATE.md` to get the exact template f
 
 2. **Author line**: `**Author:** [developer_name]` immediately after the `# Title` line (the engine injects this automatically from config if missing)
 
-3. **Clear success criteria**: Specific, measurable, with checkboxes
+3. **Clear success criteria**: Specific, measurable, with checkboxes. Number them with stable IDs (`- [ ] SC-1: ...`; never renumber, only append) and tag Implementation Plan steps with the criteria they cover (`- [ ] T1 [SC-1]: ...`). Any drafting-time clarification markers must be resolved before delivery — the engine rejects a file that still contains one.
 
 4. **Context section**: Relevant files, dependencies, considerations
 

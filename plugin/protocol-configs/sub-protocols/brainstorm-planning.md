@@ -43,14 +43,14 @@ For each source item, find the created task(s) that cover it and build a traceab
 
 | # | Source item (decision / feature / scope / dead code) | Origin | Covered by | Where |
 |---|------------------------------------------|----------|-----------------------|---------------------|
-| 1 | Event-driven, not polling | Decision | h-implement-event-bus | Success Criteria #2 |
-| 2 | Config in team-management/config.json | Decision | h-implement-event-bus | Success Criteria #4 |
+| 1 | Event-driven, not polling | Decision | h-implement-event-bus | SC-2 |
+| 2 | Config in team-management/config.json | Decision | h-implement-event-bus | SC-4 |
 | 3 | GitLab-only in phase 1 | Scope | OUT OF SCOPE | phase 2, user-confirmed |
-| 4 | old-poller.py now dead | Dead code | l-cleanup-poller | Success Criteria #1 |
+| 4 | old-poller.py now dead | Dead code | l-cleanup-poller | SC-1 |
 ```
 
 Rules:
-- **Covered** = the item is embodied in a **created task file** — its `## Success Criteria` (or an explicit step in that task file's own `## Implementation Plan`). The brainstorm results document's `## Implementation Plan` does NOT count: that is the plan this audit checks *against*, so citing it would pass an item that never reached a real task — the exact regression this audit exists to catch. Cite the task name and the specific line — not just "task X".
+- **Covered** = the item is embodied in a **created task file** — its `## Success Criteria` (cite the criterion's stable ID, e.g. `SC-2`) or an explicit step in that task file's own `## Implementation Plan` (cite the step, e.g. `T3`). The brainstorm results document's `## Implementation Plan` does NOT count: that is the plan this audit checks *against*, so citing it would pass an item that never reached a real task — the exact regression this audit exists to catch. Cite the task name and the specific line — not just "task X".
 - One source item may map to several tasks, and one task may cover several items. That is fine.
 - **No silent drops.** Every source item gets its own row. A row with no covering task MUST put `OUT OF SCOPE` or `DEFERRED → <follow-up task name>` in the **Covered by** column (with the reason in **Where**) — never leave **Covered by** blank.
 
