@@ -1,0 +1,43 @@
+{
+    "name": "retro",
+    "description": "Team retrospective from the enforced audit trail: git history + protocol logs turned into a human-readable report with metrics and week-over-week trends. Branchless (per-run r-retro-<date> task with frontmatter branch: none); artifacts land uncommitted in docs/retros/. Example: protocol_start(protocol_name=\"retro\") at the end of a work week to generate the weekly team retro and trend snapshot.",
+    "steps": [
+        {
+            "name": "data-collection",
+            "description": "Stale-anchor pre-flight, typed data aggregation, scope confirmation, retro task creation",
+            "mode": "discussion",
+            "pre_funcs": ["retro_collect_data"],
+            "post_funcs": ["require_retro_anchor", "set_task_state", "create_task_file", "update_task_status_in_progress"],
+            "post_funcs_stop_on_failure": true,
+            "advance_args": ["task", "task_content"],
+            "start": "@sub-protocols/retro-data-collection.md",
+            "end": "Advance when:\n- [ ] retro_collect_data reported guard: \"passed\" — on \"blocked\": recoverable=false → explain and protocol_abort; recoverable=true (window-dependent reasons only) → abort OR, with explicit user approval, proceed with a wider retro_window_days in the task file (the structural gate re-validates). Never work around the guard by other means.\n- [ ] The user has confirmed the retro scope (window, authors, data preview).\n- [ ] Retro task file written WRITE-FILE-FIRST to team-management/tasks/r-retro-<date>.md (frontmatter branch: none, optional retro_window_days), then advance with args: {\"task\": \"r-retro-<date>\", \"task_content\": \"\"} using the engine-supplied suggested_task_name."
+        },
+        {
+            "name": "metrics",
+            "description": "Deterministic engine-computed metrics and week-over-week deltas, reviewed with the user",
+            "mode": "discussion",
+            "pre_funcs": ["retro_compute_metrics"],
+            "start": "@sub-protocols/retro-metrics.md",
+            "end": "Advance when:\n- [ ] The engine-computed metrics and deltas from retro_compute_metrics have been presented to the user (engine numbers are authoritative — never recompute or adjust them).\n- [ ] The user has confirmed the metrics look plausible or anomalies were discussed."
+        },
+        {
+            "name": "narrative",
+            "description": "Write the retro report (praise, growth opportunity, habits, trends) to docs/retros/",
+            "mode": "documentation",
+            "post_funcs": ["retro_finalize_snapshot"],
+            "post_funcs_stop_on_failure": true,
+            "start": "@sub-protocols/retro-narrative.md",
+            "end": "Advance when:\n- [ ] The narrative report exists at docs/retros/retro-<date>.md with all required sections: ## Praise, ## Growth Opportunity, ## Habits, ## Trends.\n- [ ] Praises cite real commit SHAs from the metrics payload; exactly ONE growth opportunity framed as an investment; exactly 3 habits, each adoptable in under 5 minutes.\nOn advance the engine credential-filters the report in place, verifies the required sections, and writes the JSON snapshot — retro_finalize_snapshot blocks the advance on any failure."
+        },
+        {
+            "name": "snapshot",
+            "description": "Review the snapshot and trends, confirm completion, archive the retro task",
+            "mode": "discussion",
+            "post_funcs": ["archive_task", "cleanup_task_scoped_state", "clear_task_state"],
+            "post_funcs_stop_on_failure": false,
+            "start": "@sub-protocols/retro-snapshot.md",
+            "end": "Advance when:\n- [ ] The user has reviewed the report and snapshot and explicitly confirmed the retro is complete.\nOn advance the engine automatically archives the retro task and cleans up task-scoped state. Retro artifacts (report, snapshot, archived task) are left UNCOMMITTED for the user to review and commit."
+        }
+    ]
+}

@@ -14,6 +14,7 @@ This module is imported by MCP tools (protocol.py, task_state.py)
 and reads/writes to .claude/state/ files.
 """
 
+import hashlib
 import importlib.util
 import json
 import os
@@ -49,7 +50,15 @@ from shared_state import (
     ensure_state_dir,
 )
 
+from claude_md_hygiene import (
+    DEFAULT_MAX_LINES as DEFAULT_CLAUDE_MD_MAX_LINES,
+    collect_task_names,
+    count_content_lines,
+    find_hygiene_hits,
+    parse_added_lines,
+)
 from optimize_completion import OptimizeCompletionMixin
+from retro import RetroMixin
 
 # _PHASE_REGISTRY & friends are re-exported here for back-compat importers
 # (e.g. `from protocol_engine import _PHASE_REGISTRY`); the noqa keeps ruff from
@@ -64,7 +73,31 @@ from ai_providers import (
 )
 
 
-class ProtocolEngine(OptimizeCompletionMixin, AIProvidersMixin):
+# Review dispatch classifier (CR-2 minimal gate, m-gstack-agent-roster).
+# testing-specialist / code-cleanliness fire at >= _SPECIALIST_MIN_DIFF_LINES
+# changed lines (and never on a docs/config-only diff); red-team fires STRICTLY
+# ABOVE _RED_TEAM_MIN_DIFF_LINES. The cost log is project-scoped (NOT under
+# .claude/state/tasks/<task>/, which cleanup_task_scoped_state wipes at
+# completion) so the Phase 1->2 checkpoint can read it after tasks finish.
+_REVIEW_DISPATCH_LOG_NAME = "review-dispatch-log.jsonl"
+_REVIEW_DISPATCH_AGENTS = ("testing-specialist", "code-cleanliness", "red-team")
+_DOCS_CONFIG_SUFFIXES = frozenset({
+    ".md", ".rst", ".txt", ".json", ".yaml", ".yml", ".toml", ".ini", ".cfg",
+})
+_SPECIALIST_MIN_DIFF_LINES = 50
+_RED_TEAM_MIN_DIFF_LINES = 200
+# The framework's own working tree is bookkeeping ABOUT the change, not the
+# change under review: a task markdown routinely runs to several hundred lines
+# of investigation narrative, so counting it measures how verbosely the task was
+# written rather than how large the change is. Worse, red-team is deliberately
+# NOT docs-gated, so a docs-only change carrying a long task file could cross
+# the 200-line trigger on narrative alone. Excluded from BOTH measurement
+# sources AND from the docs_config_only verdict. wiki/ and docs/ are
+# deliberately absent — they are the project's own content.
+_FRAMEWORK_PATH_ROOTS = frozenset({"team-management", ".claude", ".agents"})
+
+
+class ProtocolEngine(RetroMixin, OptimizeCompletionMixin, AIProvidersMixin):
     """Manages structured workflow protocols with step tracking and automation."""
 
     def __init__(self, project_root: Path):
@@ -250,8 +283,9 @@ class ProtocolEngine(OptimizeCompletionMixin, AIProvidersMixin):
 
         Copies the protocol JSON + every referenced @sub-protocol (from each
         step's top-level ``start``) + the provider templates for the protocol's
-        AI phases (only those with an on-disk template — ``code_review`` uses
-        inline prompts and is skipped) from ``protocol-configs/system/`` into
+        AI phases (only those with an on-disk template — the guard covers a
+        partial install; every shipped phase now has one) from
+        ``protocol-configs/system/`` into
         ``protocol-configs/custom/``. Records a provenance sidecar
         ``custom/.forked-from.json`` (sha256 of each system source at fork time)
         so :meth:`check_drift` can later detect upstream changes. Existing custom
@@ -307,7 +341,9 @@ class ProtocolEngine(OptimizeCompletionMixin, AIProvidersMixin):
                 pairs.append((src_base / ref, custom_dir / ref))
 
         # Provider templates only for phases this protocol actually wires via
-        # pre_funcs, and only those with a file on disk (code_review is inline).
+        # pre_funcs, and only those with a file on disk — the `src.exists()`
+        # guard below covers any phase whose template is missing (a partial
+        # install, or a future phase whose templates have not landed yet).
         func_to_subpath = {e["func_name"]: e["template_subpath"] for e in _PHASE_REGISTRY.values()}
         subpaths = []
         for step in steps:
@@ -609,10 +645,34 @@ class ProtocolEngine(OptimizeCompletionMixin, AIProvidersMixin):
             },
             {
                 "name": "require_spec_review_passed",
-                "description": "Require SPEC_REVIEW: PASSED note in the task's protocol log. Use as pre_func for entry-time reminder and as post_func for structural block on advance-out of code-review.",
-                "typical_usage": "pre_func | post_func",
+                "description": "Require a SPEC_REVIEW: PASSED note in the task's protocol log that still matches the working tree: a note carrying tree_hash passes only while the current review tree hash equals it (null hash = blocked); a legacy note without the key falls back to the backward-goto timestamp check. post_func on code-review, after verify_review_round — the spec audit runs last.",
+                "typical_usage": "post_func",
                 "required_args": [],
                 "reads_task_state": True,
+                "side_effects": [],
+            },
+            {
+                "name": "verify_review_round",
+                "description": "Block advance unless the latest REVIEW_ROUND: note in the task's protocol log carries a tree_hash equal to the current review tree hash (HEAD + tracked diff + untracked files, framework working tree excluded) — i.e. no code changed after the final review round. Fails closed on a missing log, missing note, null hash or hash failure. First post_func on code-review.",
+                "typical_usage": "post_func",
+                "required_args": [],
+                "reads_task_state": True,
+                "side_effects": [],
+            },
+            {
+                "name": "require_deferred_criteria_done",
+                "description": "Block advance until the documentation criteria the spec audit deferred are re-audited on the current tree. Reads the latest `SPEC_DEFERRED:` carriage note (the `SPEC_DEFERRED: PASSED` note never counts as one): no carriage passes (tasks begun before deferral existed), `none` passes, a carriage older than the latest `SPEC_REVIEW: PASSED` blocks, and a list of SC-IDs needs a newer `SPEC_DEFERRED: PASSED` note whose tree_hash matches the current tree. Notes are ordered by (timestamp, log position). Fails closed on a missing log. post_func on the task documentation step.",
+                "typical_usage": "post_func",
+                "required_args": [],
+                "reads_task_state": True,
+                "side_effects": [],
+            },
+            {
+                "name": "check_claude_md_hygiene",
+                "description": "Block advance when a line this task ADDED to any CLAUDE.md (tracked diff vs HEAD plus untracked CLAUDE.md files) names a task under team-management/tasks/, uses history wording, or carries code-review chatter — or when a CLAUDE.md file grew and now exceeds documentation.claude_md_max_lines (default 300). Pre-existing lines never block. documentation.claude_md_hygiene: false disables it; a git failure degrades to a pass with a warning. post_func on the task documentation step and the optimize synthesis step.",
+                "typical_usage": "post_func",
+                "required_args": [],
+                "reads_task_state": False,
                 "side_effects": [],
             },
             {
@@ -882,6 +942,49 @@ class ProtocolEngine(OptimizeCompletionMixin, AIProvidersMixin):
                 "reads_task_state": False,
                 "side_effects": [],
             },
+            {
+                "name": "classify_review_dispatch",
+                "description": "Deterministic diff classifier for the code-review step's specialist dispatch (CR-2 minimal gate). Measures the diff (git diff HEAD --numstat --no-renames + untracked line counts), EXCLUDING the framework's own working tree — team-management/, .claude/, .agents/ — whose dropped lines are reported separately as framework_lines_excluded, and returns per-agent fire/skip decisions in pre_funcs_results: testing-specialist and code-cleanliness at >= 50 changed lines and never on docs/config-only diffs; red-team at > 200 lines (its CRITICAL-first-round-finding trigger is orchestrator-owned). Gated by code_review.testing_specialist_enabled / cleanliness_enabled / red_team_enabled (absent -> true). Appends one JSONL record per evaluation to .claude/state/review-dispatch-log.jsonl. Any failure degrades to skip-all-specialists with success=True — never blocks the review step.",
+                "typical_usage": "pre_func",
+                "required_args": [],
+                "reads_task_state": True,
+                "side_effects": ["Appends to .claude/state/review-dispatch-log.jsonl"],
+            },
+            {
+                "name": "retro_collect_data",
+                "description": "Retro data-collection pre_func: runs the stale-anchor pre-flight guard (detached HEAD / stale default-branch tip / fewer than 3 non-merge window commits / any git failure), aggregates .claude/state/protocol-logs/*.json through the TYPED cross-task projection (never raw summary/note/reason text), and returns a sanitized git preview plus the engine-supplied UTC report_date and suggested r-retro-<date> task name. On guard block returns guard=blocked with abort instructions (success stays True — pre_funcs never crash the step).",
+                "typical_usage": "pre_func",
+                "required_args": [],
+                "reads_task_state": False,
+                "side_effects": [],
+            },
+            {
+                "name": "require_retro_anchor",
+                "description": "Retro data-collection post_func (wire with post_funcs_stop_on_failure): structural stale-anchor gate. Validates the task name matches r-retro-YYYY-MM-DD with the date within 1 day of engine UTC today, reads retro_window_days from the task-file frontmatter (default 7, clamp 1-90), and re-runs the guard with that window — blocking the advance with an explanation on any anchor failure.",
+                "typical_usage": "post_func",
+                "required_args": ["task"],
+                "reads_task_state": True,
+                "side_effects": [],
+            },
+            {
+                "name": "retro_compute_metrics",
+                "description": "Retro metrics pre_func: deterministic v1 metrics from the default branch's window commits — sessions by 45-minute gap per author, focus score (share of file-touches in the top top-level area), weighted commits (bucket weights 0.5/1.0/1.5 — LOC deliberately downweighted), hotspots (5+ touches), protocol stats from the typed log reader — plus week-over-week deltas against the previous docs/retros snapshot (strict typed read). Commit subjects/authors are sanitized and credential-filtered before being surfaced.",
+                "typical_usage": "pre_func",
+                "required_args": [],
+                "reads_task_state": True,
+                "side_effects": ["Writes .claude/state/tasks/<task>/retro-metrics.json"],
+            },
+            {
+                "name": "retro_finalize_snapshot",
+                "description": "Retro narrative post_func (wire with post_funcs_stop_on_failure): re-reads the LLM-written docs/retros/retro-<date>.md report, applies the shared credential filter and rewrites the file IN PLACE when redactions occur, verifies the required sections (## Praise / ## Growth Opportunity / ## Habits / ## Trends), and writes the typed JSON snapshot to docs/retros/retro-<date>.json. The narrative step cannot complete unfiltered; files are left uncommitted for the user.",
+                "typical_usage": "post_func",
+                "required_args": [],
+                "reads_task_state": True,
+                "side_effects": [
+                    "May rewrite docs/retros/retro-<date>.md (credential redaction)",
+                    "Writes docs/retros/retro-<date>.json",
+                ],
+            },
         ]
 
         # AI provider resolver metadata — registry-driven for future phase additions.
@@ -900,7 +1003,12 @@ class ProtocolEngine(OptimizeCompletionMixin, AIProvidersMixin):
                 "typical_usage": "pre_func",
                 "required_args": [],
                 "reads_task_state": True,
-                "side_effects": [],
+                # Only the phase that consumes {changed_files} shells out; the
+                # rest are pure config+file reads.
+                "side_effects": (
+                    ["Runs `git status --porcelain` to collect the changed-file list"]
+                    if entry["needs_changed_files"] else []
+                ),
             })
 
         # Cross-validate metadata against actual handler registry
@@ -1893,6 +2001,14 @@ class ProtocolEngine(OptimizeCompletionMixin, AIProvidersMixin):
             "step": step_name,
             "note": note.strip(),
         }
+        if self._is_review_hash_note(note_entry["note"]):
+            # Bind the review note to the code it saw. A failure is recorded,
+            # never raised: the gates treat a null hash as stale.
+            try:
+                note_entry["tree_hash"] = self._compute_review_tree_hash()
+            except Exception as e:  # noqa: BLE001 — any failure fails the gate closed
+                note_entry["tree_hash"] = None
+                note_entry["tree_hash_error"] = str(e)[:200]
 
         # Append note to log
         def add_note(log):
@@ -2175,6 +2291,9 @@ class ProtocolEngine(OptimizeCompletionMixin, AIProvidersMixin):
             "update_task_status_in_progress": self._func_update_task_status,
             # Pre/Post-funcs (code-review — spec compliance + evidence gates)
             "require_spec_review_passed": self._func_require_spec_review_passed,
+            "verify_review_round": self._func_verify_review_round,
+            "check_claude_md_hygiene": self._func_check_claude_md_hygiene,
+            "require_deferred_criteria_done": self._func_require_deferred_criteria_done,
             "check_completion_evidence": self._func_check_completion_evidence,
             # Pre-func (code-review — optional test gate)
             "verify_tests_pass": self._func_verify_tests_pass,
@@ -2218,6 +2337,13 @@ class ProtocolEngine(OptimizeCompletionMixin, AIProvidersMixin):
             "write_optimize_setup": self._func_write_optimize_setup,
             # Wiki integration
             "wiki_update_reminder": self._func_wiki_update_reminder,
+            # Pre-func (code-review — CR-2 specialist dispatch gate)
+            "classify_review_dispatch": self._func_classify_review_dispatch,
+            # Retro-protocol funcs (m-gstack-retro-protocol — RetroMixin)
+            "retro_collect_data": self._func_retro_collect_data,
+            "require_retro_anchor": self._func_require_retro_anchor,
+            "retro_compute_metrics": self._func_retro_compute_metrics,
+            "retro_finalize_snapshot": self._func_retro_finalize_snapshot,
         }
         # AI provider resolver handlers — registry-driven for future phase additions.
         for entry in _PHASE_REGISTRY.values():
@@ -3090,59 +3216,250 @@ class ProtocolEngine(OptimizeCompletionMixin, AIProvidersMixin):
         }
 
     # Steps that represent code-changing work. A goto back to one of these
-    # invalidates an earlier SPEC_REVIEW: PASSED sentinel (Codex W1 round 3).
+    # invalidates a legacy (unhashed) SPEC_REVIEW: PASSED sentinel.
     _CODE_CHANGING_STEPS = frozenset({"investigation", "implementation", "test-baseline", "refactoring", "experimentation"})
 
-    def _func_require_spec_review_passed(self, args: Dict = None) -> Dict:
-        """Require a SPEC_REVIEW: PASSED note in the task's audit log before advancing.
+    _SPEC_SENTINEL = "SPEC_REVIEW: PASSED"
+    _REVIEW_ROUND_PREFIX = "REVIEW_ROUND:"
+    _SPEC_DEFERRED_PREFIX = "SPEC_DEFERRED:"
+    _SPEC_DEFERRED_PASSED = "SPEC_DEFERRED: PASSED"
 
-        Used as both pre_func (entry reminder) and post_func (structural block) on
-        the code-review step. Scans the notes list for the exact sentinel string
-        AND verifies the sentinel is newer than the most recent backward goto to
-        a code-changing step — otherwise the sentinel is stale and the spec audit
-        must be re-run against the updated diff.
+    @classmethod
+    def _is_review_hash_note(cls, note: str) -> bool:
+        """True for the notes save_note binds to the working tree.
+
+        Takes the already-stripped note text — the same normalisation the gates
+        apply — so a note is stamped exactly when a gate would count it.
         """
-        task_state = get_task_state()
-        task_name = task_state.get("task")
+        return (note in (cls._SPEC_SENTINEL, cls._SPEC_DEFERRED_PASSED)
+                or note.startswith(cls._REVIEW_ROUND_PREFIX))
+
+    def _compute_review_tree_hash(self) -> str:
+        """Hash the code a review saw: HEAD, the tracked diff against HEAD, and
+        every untracked file, with the framework working tree excluded (so
+        work-log appends never change it). Records are length-prefixed so no
+        two different trees serialise to the same byte stream.
+
+        Raises RuntimeError on any git failure (including a repo with no HEAD)
+        and OSError on an unreadable file — callers fail closed.
+        """
+        def git(*git_args: str) -> bytes:
+            proc = subprocess.run(
+                ["git", *git_args],
+                stdin=subprocess.DEVNULL, capture_output=True,
+                cwd=str(self.project_root), timeout=GIT_TIMEOUT_MEDIUM, check=False,
+            )
+            if proc.returncode != 0:
+                detail = proc.stderr.decode("utf-8", "replace").strip()[:200]
+                raise RuntimeError(f"git {git_args[0]} failed: {detail}")
+            return proc.stdout
+
+        digest = hashlib.sha256(b"review-tree-v1\0")
+
+        def record(tag: bytes, data: bytes) -> None:
+            digest.update(tag + len(data).to_bytes(8, "big") + data)
+
+        record(b"H", git("rev-parse", "--verify", "HEAD").strip())
+        excludes = [f":(exclude){root}" for root in sorted(_FRAMEWORK_PATH_ROOTS)]
+        record(b"D", git("diff", "HEAD", "--binary", "--no-renames", "--no-ext-diff",
+                         "--no-textconv", "--no-color", "--", ".", *excludes))
+        untracked = git("ls-files", "--others", "--exclude-standard", "-z").split(b"\0")
+        for rel in sorted(path for path in untracked if path):
+            rel_str = rel.decode("utf-8", "surrogateescape")
+            if self._is_framework_path(rel_str):
+                continue
+            fpath = self.project_root / rel_str
+            record(b"P", rel)
+            if fpath.is_symlink():
+                record(b"L", os.fsencode(os.readlink(fpath)))
+            elif fpath.is_file():
+                record(b"F", fpath.read_bytes())
+            else:
+                record(b"X", b"")  # FIFO/socket/device: never opened (open() could block)
+        return digest.hexdigest()
+
+    def _read_task_protocol_log(self, func_name: str) -> "tuple[Optional[dict], Optional[Dict]]":
+        """Read the ACTIVE task's own protocol log for a review gate.
+
+        Returns (log, None) or (None, blocking_result). Never consults
+        _pending.json: a stale note in an unrelated pending log must not
+        unblock a gate. Missing or unreadable log fails closed.
+        """
+        task_name = get_task_state().get("task")
         if not task_name:
-            return {
-                "func": "require_spec_review_passed",
+            return None, {
+                "func": func_name,
                 "success": False,
-                "error": "No active task — cannot locate protocol log for spec-review sentinel.",
+                "error": "No active task — cannot locate the protocol log for review notes.",
                 "message": "[BLOCKED] No active task.",
             }
-
-        # Read task-specific log file directly — do NOT consult _pending.json
-        # fallback (Codex W2 round 4: a stale SPEC_REVIEW: PASSED note in an
-        # unrelated pending log could otherwise unblock this gate).
         log_path = self.logs_dir / f"{task_name}.json"
         if not log_path.exists():
-            return {
-                "func": "require_spec_review_passed",
+            return None, {
+                "func": func_name,
                 "success": False,
                 "error": (
-                    "Task-specific protocol log is missing — cannot verify "
-                    "SPEC_REVIEW: PASSED sentinel. Re-enter the code-review "
-                    "step via protocol_goto or dispatch the agent now and "
-                    "save the sentinel."
+                    "Task-specific protocol log is missing — cannot verify review "
+                    "notes. Re-enter the code-review step via protocol_goto, or "
+                    "run the review now and save its notes."
                 ),
                 "message": "[BLOCKED] Task protocol log not found — fail closed.",
             }
         try:
             with open(log_path, "r", encoding="utf-8") as f:
-                log = json.load(f)
+                return json.load(f), None
         except (IOError, OSError, json.JSONDecodeError) as e:
-            return {
-                "func": "require_spec_review_passed",
+            return None, {
+                "func": func_name,
                 "success": False,
                 "error": f"Failed to read protocol log: {e}",
                 "message": "[BLOCKED] Cannot read protocol log.",
             }
+
+    @staticmethod
+    def _latest_note_position(notes: List[dict], matches) -> Optional[tuple]:
+        """`(timestamp, log index, note)` of the newest note whose stripped text
+        satisfies `matches`, or None. Ties on the ISO timestamp go to the later
+        log position; compare two results by their first two fields."""
+        candidates = [
+            (n.get("at", ""), index, n)
+            for index, n in enumerate(notes)
+            if isinstance(n, dict) and matches(n.get("note", "").strip())
+        ]
+        return max(candidates, key=lambda c: (c[0], c[1])) if candidates else None
+
+    @classmethod
+    def _latest_note(cls, notes: List[dict], matches) -> Optional[dict]:
+        """The newest note whose stripped text satisfies `matches`."""
+        found = cls._latest_note_position(notes, matches)
+        return found[2] if found else None
+
+    def _is_deferred_carriage(self, text: str) -> bool:
+        return text.startswith(self._SPEC_DEFERRED_PREFIX) and text != self._SPEC_DEFERRED_PASSED
+
+    def _steps_running(self, func_name: str) -> Optional[tuple]:
+        """`(names, current_index)`: the steps of the active protocol whose
+        post_funcs include `func_name`, as (index, name) pairs, plus the current
+        step index. None when the protocol state or config cannot be read."""
+        protocol_info = get_protocol_state()
+        if not protocol_info:
+            return None
+        config = load_protocol_config(protocol_info["name"])
+        if not config:
+            return None
+        owned = []
+        for index, step in enumerate(config.get("steps", [])):
+            names = [f if isinstance(f, str) else (f or {}).get("func") for f in step.get("post_funcs") or []]
+            if func_name in names:
+                owned.append((index, step.get("name")))
+        return owned, protocol_info.get("current_step", 0)
+
+    def _later_step_has_deferred_gate(self) -> bool:
+        """True when a step after the current one runs require_deferred_criteria_done.
+        An unreadable protocol state or config counts as no gate."""
+        found = self._steps_running("require_deferred_criteria_done")
+        return bool(found) and any(index > found[1] for index, _ in found[0])
+
+    @staticmethod
+    def _notes_of_steps(notes: List[dict], step_names) -> List[dict]:
+        """`notes` with every note saved outside `step_names` blanked. Blanking
+        instead of dropping keeps log positions — the tie-break — those of the
+        real log. A note counts only in the step that owns it, so a note saved
+        elsewhere can neither satisfy a gate nor cancel what it checks."""
+        return [n if isinstance(n, dict) and n.get("step") in step_names else {} for n in notes]
+
+    def _audit_notes(self, notes: List[dict]) -> Optional[List[dict]]:
+        """Notes saved in the steps that run the spec audit (require_spec_review_passed);
+        None when the protocol config cannot be read."""
+        found = self._steps_running("require_spec_review_passed")
+        if found is None:
+            return None
+        return self._notes_of_steps(notes, {name for _, name in found[0]})
+
+    def _deferral_without_gate(self, audit: List[dict]) -> Optional[Dict]:
+        """Validate the SPEC_DEFERRED carriage saved with the latest spec PASS.
+
+        Block when it is missing or older than the latest sentinel — a forgotten
+        carriage would let a deferred criterion skip the re-audit and reach
+        completion as DONE — and when it lists SC-IDs that no later step of the
+        active protocol re-audits. `audit` is the log seen through `_audit_notes`."""
+        sentinel = self._latest_note_position(audit, lambda t: t == self._SPEC_SENTINEL)
+        carriage = self._latest_note_position(audit, self._is_deferred_carriage)
+        if sentinel is None or carriage is None or carriage[:2] < sentinel[:2]:
+            return {
+                "func": "require_spec_review_passed",
+                "success": False,
+                "error": (
+                    "No SPEC_DEFERRED: carriage note was saved in this step after the latest "
+                    "SPEC_REVIEW: PASSED. Save the one that matches the audit's verdict: SPEC_DEFERRED: "
+                    "<SC-IDs from ## Deferred Items>, or SPEC_DEFERRED: none when it deferred "
+                    "nothing (always the case for an audit run before deferral existed)."
+                ),
+                "message": "[BLOCKED] Missing SPEC_DEFERRED carriage note.",
+            }
+        listed = carriage[2]["note"].strip()[len(self._SPEC_DEFERRED_PREFIX):].strip()
+        if listed.lower() == "none" or self._later_step_has_deferred_gate():
+            return None
+        return {
+            "func": "require_spec_review_passed",
+            "success": False,
+            "error": (
+                f"The spec audit deferred {listed}, but no later step of this protocol runs "
+                "require_deferred_criteria_done, so nothing would re-audit them. Write the "
+                "documentation now, re-run the spec audit without a later documentation step "
+                "named, and save SPEC_DEFERRED: none. A custom fork whose documentation step "
+                "lacks the gate needs /team-management:custom-protocol-update-after-reinstall."
+            ),
+            "message": "[BLOCKED] Deferred criteria with no later step to re-audit them.",
+        }
+
+    def _tree_hash_staleness(self, note: dict) -> Optional[str]:
+        """None when the note still matches the current tree, else the reason
+        it does not. A null recorded hash or a failing current hash is stale."""
+        # The hash needs a commit to anchor on: a repository with no commits
+        # cannot pass these gates until one exists.
+        remedy = ("; if the repository has no commits yet, make an initial commit, "
+                  "then run the stage again and save a fresh note")
+        recorded = note.get("tree_hash")
+        if recorded is None:
+            return ("the tree hash could not be computed when the note was saved "
+                    f"({note.get('tree_hash_error', 'no hash recorded')}){remedy}")
+        try:
+            current = self._compute_review_tree_hash()
+        except Exception as e:  # noqa: BLE001 — any failure fails the gate closed
+            return f"the current tree hash cannot be computed ({str(e)[:200]}){remedy}"
+        if current != recorded:
+            return "the code changed after the note was saved"
+        return None
+
+    def _func_require_spec_review_passed(self, args: Dict = None) -> Dict:
+        """Require a SPEC_REVIEW: PASSED note that still matches the code.
+
+        post_func on the code-review step; the spec audit runs last, after the
+        final review round. A sentinel carrying `tree_hash` passes only while
+        the current review tree hash equals it. A legacy sentinel with no
+        `tree_hash` key falls back to the timestamp check: it is stale when a
+        backward goto to a code-changing step happened after it.
+        """
+        log, blocked = self._read_task_protocol_log("require_spec_review_passed")
+        if blocked:
+            return blocked
         notes = log.get("notes", []) or []
         gotos = log.get("gotos", []) or []
 
-        sentinel_notes = [n for n in notes if n.get("note", "").strip() == "SPEC_REVIEW: PASSED"]
-        if not sentinel_notes:
+        # The sentinel counts only from a step that runs this gate: a fresh one
+        # saved elsewhere would stand in for an audit this step never ran.
+        audit = self._audit_notes(notes)
+        if audit is None:
+            return {
+                "func": "require_spec_review_passed",
+                "success": False,
+                "error": "The active protocol state or config cannot be read, so the spec "
+                         "audit notes cannot be attributed to the audit step.",
+                "message": "[BLOCKED] Protocol config unreadable — fail closed.",
+            }
+        sentinel = self._latest_note(audit, lambda text: text == self._SPEC_SENTINEL)
+        if sentinel is None:
             return {
                 "func": "require_spec_review_passed",
                 "success": False,
@@ -3154,9 +3471,30 @@ class ProtocolEngine(OptimizeCompletionMixin, AIProvidersMixin):
                 ),
                 "message": "[BLOCKED] Missing SPEC_REVIEW: PASSED sentinel in protocol log.",
             }
+        latest_sentinel_at = sentinel.get("at", "")
+
+        if "tree_hash" in sentinel:
+            reason = self._tree_hash_staleness(sentinel)
+            if reason:
+                return {
+                    "func": "require_spec_review_passed",
+                    "success": False,
+                    "error": (
+                        f"Spec compliance review is STALE — {reason}. Re-dispatch "
+                        "the spec-compliance-reviewer agent against the current "
+                        "diff and save a fresh SPEC_REVIEW: PASSED note."
+                    ),
+                    "message": "[BLOCKED] Stale SPEC_REVIEW: PASSED sentinel — re-run spec audit.",
+                    "latest_sentinel_at": latest_sentinel_at,
+                }
+            return self._deferral_without_gate(audit) or {
+                "func": "require_spec_review_passed",
+                "success": True,
+                "message": "Spec compliance review passed on the current tree.",
+                "latest_sentinel_at": latest_sentinel_at,
+            }
 
         # ISO 8601 timestamps sort lexicographically the same as chronologically.
-        latest_sentinel_at = max((n.get("at", "") for n in sentinel_notes), default="")
         backward_goto_ats = [
             g.get("at", "") for g in gotos
             if g.get("to_step") in self._CODE_CHANGING_STEPS
@@ -3179,13 +3517,247 @@ class ProtocolEngine(OptimizeCompletionMixin, AIProvidersMixin):
                 "latest_backward_at": latest_backward_at,
             }
 
-        return {
+        return self._deferral_without_gate(audit) or {
             "func": "require_spec_review_passed",
             "success": True,
             "message": "Spec compliance review recorded as passed and still fresh.",
             "latest_sentinel_at": latest_sentinel_at,
         }
 
+    def _func_verify_review_round(self, args: Dict = None) -> Dict:
+        """Require that no code changed after the final code-review round.
+
+        post_func on the code-review step. The latest `REVIEW_ROUND:` note must
+        carry a tree_hash equal to the current review tree hash. A rejection by
+        another gate with no code change leaves the round valid; any code edit
+        after the round (a fix, a user request) demands a fresh round.
+        """
+        log, blocked = self._read_task_protocol_log("verify_review_round")
+        if blocked:
+            return blocked
+        notes = log.get("notes", []) or []
+        latest = self._latest_note(notes, lambda text: text.startswith(self._REVIEW_ROUND_PREFIX))
+        if latest is None:
+            return {
+                "func": "verify_review_round",
+                "success": False,
+                "error": (
+                    "No REVIEW_ROUND note in the protocol log. After every code-review "
+                    "round, call protocol_save_note('REVIEW_ROUND: <n> — <c> critical, "
+                    "<w> warnings; <dispositions>') — the engine binds it to the tree."
+                ),
+                "message": "[BLOCKED] Missing REVIEW_ROUND note.",
+            }
+        reason = self._tree_hash_staleness(latest)
+        if reason:
+            return {
+                "func": "verify_review_round",
+                "success": False,
+                "error": (
+                    f"The last review round is STALE — {reason}. Run a fresh round "
+                    "on the current tree (with the previous rounds' history) and "
+                    "save a new REVIEW_ROUND note."
+                ),
+                "message": "[BLOCKED] Code changed after the last review round.",
+                "latest_round_at": latest.get("at", ""),
+            }
+        return {
+            "func": "verify_review_round",
+            "success": True,
+            "message": "The last review round matches the current tree.",
+            "latest_round_at": latest.get("at", ""),
+        }
+
+
+    def _claude_md_hygiene_config(self) -> "tuple[bool, int]":
+        """(enabled, max_lines) from documentation.*; defaults on any trouble."""
+        enabled, max_lines = True, DEFAULT_CLAUDE_MD_MAX_LINES
+        try:
+            config = json.loads((self.project_root / "team-management" / "config.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return enabled, max_lines
+        section = config.get("documentation") if isinstance(config, dict) else None
+        if isinstance(section, dict):
+            if isinstance(section.get("claude_md_hygiene"), bool):
+                enabled = section["claude_md_hygiene"]
+            limit = section.get("claude_md_max_lines")
+            if isinstance(limit, int) and not isinstance(limit, bool) and limit > 0:
+                max_lines = limit
+        return enabled, max_lines
+
+    def _changed_claude_md_files(self) -> "List[tuple]":
+        """[(rel_path, added_lines, content_lines, grew)] for every CLAUDE.md the
+        task touched outside the framework working tree. `content_lines` and
+        `grew` ignore the framework's managed @-import block, so session start
+        wiring it in never reads as the task's growth. Raises on git failure."""
+        def git(*git_args: str, check: bool = True) -> str:
+            proc = subprocess.run(
+                ["git", *git_args],
+                stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                encoding="utf-8", errors="replace",  # never the locale codec: a stray byte must not crash the gate
+                cwd=str(self.project_root), timeout=GIT_TIMEOUT_MEDIUM, check=False,
+            )
+            if proc.returncode != 0:
+                if not check:
+                    return ""
+                raise RuntimeError(f"git {git_args[0]} failed: {proc.stderr.strip()[:200]}")
+            return proc.stdout
+
+        def current_text(rel: str) -> str:
+            fpath = self.project_root / rel
+            return fpath.read_text(encoding="utf-8", errors="replace") if fpath.is_file() else ""
+
+        def is_claude_md(rel: str) -> bool:
+            return rel.rsplit("/", 1)[-1] == "CLAUDE.md" and not self._is_framework_path(rel)
+
+        changed = []
+        for entry in git("diff", "HEAD", "--numstat", "--no-renames", "-z").split("\0"):
+            parts = entry.split("\t", 2)
+            if len(parts) < 3 or not is_claude_md(parts[2]):
+                continue
+            rel = parts[2]
+            patch = git("diff", "HEAD", "-U0", "--no-color", "--no-ext-diff", "--no-textconv",
+                        "--no-renames", "--", rel)
+            now = count_content_lines(current_text(rel))
+            # A file absent from HEAD (newly staged) has no previous content.
+            before = count_content_lines(git("show", f"HEAD:./{rel}", check=False))
+            changed.append((rel, parse_added_lines(patch), now, now > before))
+        for rel in git("ls-files", "--others", "--exclude-standard", "-z").split("\0"):
+            if not rel or not is_claude_md(rel) or not (self.project_root / rel).is_file():
+                continue
+            text = current_text(rel)
+            changed.append((rel, list(enumerate(text.splitlines(), 1)), count_content_lines(text), True))
+        return changed
+
+    def _func_require_deferred_criteria_done(self, args: Dict = None) -> Dict:
+        """Require the deferred documentation criteria to be re-audited.
+
+        post_func on the task documentation step. The spec audit at the end of
+        code-review marks documentation criteria owned by this step DEFERRED and
+        the orchestrator lists them in a `SPEC_DEFERRED:` carriage note; this
+        step re-audits them and saves `SPEC_DEFERRED: PASSED`, stamped with the
+        tree hash like the review notes.
+        """
+        func = "require_deferred_criteria_done"
+        log, blocked = self._read_task_protocol_log(func)
+        if blocked:
+            return blocked
+        notes = log.get("notes", []) or []
+
+        audit = self._audit_notes(notes)
+        confirming = self._steps_running(func)
+        if audit is None or confirming is None:
+            return {
+                "func": func,
+                "success": False,
+                "error": "The active protocol state or config cannot be read, so the deferred "
+                         "criteria cannot be checked.",
+                "message": "[BLOCKED] Protocol config unreadable — fail closed.",
+            }
+        sentinel = self._latest_note_position(audit, lambda t: t == self._SPEC_SENTINEL)
+        carriage = self._latest_note_position(audit, self._is_deferred_carriage)
+        if carriage is None:
+            return {"func": func, "success": True,
+                    "message": "No SPEC_DEFERRED carriage note — nothing was deferred."}
+
+        if sentinel is not None and carriage[:2] < sentinel[:2]:
+            return {
+                "func": func,
+                "success": False,
+                "error": (
+                    "The latest SPEC_DEFERRED: carriage note is older than the latest "
+                    "SPEC_REVIEW: PASSED, so it does not describe the final spec audit. "
+                    "Only the code-review step that ran the audit can save its carriage: "
+                    "return there with protocol_goto and record it."
+                ),
+                "message": "[BLOCKED] Stale SPEC_DEFERRED carriage note.",
+            }
+
+        listed = carriage[2]["note"].strip()[len(self._SPEC_DEFERRED_PREFIX):].strip()
+        if listed.lower() == "none":
+            return {"func": func, "success": True,
+                    "message": "The final spec audit deferred nothing."}
+        deferred = [item.strip() for item in listed.split(",") if item.strip()]
+
+        confirmations = self._notes_of_steps(notes, {name for _, name in confirming[0]})
+        passed = self._latest_note_position(confirmations, lambda t: t == self._SPEC_DEFERRED_PASSED)
+        if passed is None or passed[:2] < carriage[:2]:
+            return {
+                "func": func,
+                "success": False,
+                "error": (
+                    f"Deferred documentation criteria not re-audited: {listed}. Write the "
+                    "documentation, dispatch spec-compliance-reviewer in deferred-check "
+                    "mode for these IDs, and save SPEC_DEFERRED: PASSED on PASS."
+                ),
+                "message": "[BLOCKED] Deferred criteria not confirmed.",
+                "deferred": deferred,
+            }
+        reason = self._tree_hash_staleness(passed[2])
+        if reason:
+            return {
+                "func": func,
+                "success": False,
+                "error": (
+                    f"The SPEC_DEFERRED: PASSED note is STALE — {reason}. Re-dispatch the "
+                    "deferred check on the current tree and save a fresh SPEC_DEFERRED: PASSED."
+                ),
+                "message": "[BLOCKED] Stale SPEC_DEFERRED: PASSED note — re-run the deferred check.",
+                "deferred": deferred,
+            }
+        return {"func": func, "success": True,
+                "message": "Deferred documentation criteria confirmed on the current tree.",
+                "deferred": deferred}
+
+    def _func_check_claude_md_hygiene(self, args: Dict = None) -> Dict:
+        """Keep CLAUDE.md files lean: block lines a task ADDS that carry task
+        names, history wording or review chatter, and growth past the budget.
+
+        post_func on the documentation step. Only added lines are judged, so a
+        legacy file never blocks unrelated work; shrinking never blocks.
+        """
+        func = "check_claude_md_hygiene"
+        enabled, max_lines = self._claude_md_hygiene_config()
+        if not enabled:
+            return {"func": func, "success": True,
+                    "message": "CLAUDE.md hygiene gate disabled (documentation.claude_md_hygiene: false)."}
+        try:
+            changed = self._changed_claude_md_files()
+        except (RuntimeError, OSError, ValueError, subprocess.TimeoutExpired) as e:
+            # A quality gate, not a security control: a git failure must not
+            # strand the documentation step.
+            return {"func": func, "success": True,
+                    "warning": f"CLAUDE.md hygiene not checked — {str(e)[:200]}",
+                    "message": "CLAUDE.md hygiene skipped: the diff could not be read."}
+
+        task_names = collect_task_names(self.project_root)
+        problems = []
+        for rel, added, content_lines, grew in changed:
+            for hit in find_hygiene_hits(added, task_names):
+                problems.append(f"{rel}:{hit.line} — {hit.rule}: {hit.text.strip()[:120]}")
+            if grew and content_lines > max_lines:
+                problems.append(f"{rel} — budget: {content_lines} lines (managed block excluded), "
+                                f"over the {max_lines}-line budget and grew in this task")
+
+        if problems:
+            shown = problems[:40]
+            more = f"\n... and {len(problems) - 40} more" if len(problems) > 40 else ""
+            return {
+                "func": func,
+                "success": False,
+                "error": (
+                    "CLAUDE.md additions break the content rules. A CLAUDE.md line "
+                    "must help a developer starting a new task find the code or avoid "
+                    "a mistake — no task names, no history, no review results. Rewrite "
+                    "the lines as current facts (history belongs in git and CHANGELOG.md, "
+                    "rationale in wiki decision pages), and trim files over budget:\n"
+                    + "\n".join(shown) + more
+                ),
+                "message": f"[BLOCKED] {len(problems)} CLAUDE.md hygiene problem(s).",
+                "problems": problems,
+            }
+        return {"func": func, "success": True,
+                "message": f"CLAUDE.md hygiene passed ({len(changed)} changed file(s))."}
 
     def _func_verify_branch_and_task(self, args: Dict = None) -> Dict:
         """Verify git branch matches task state and task file exists. Non-blocking."""
@@ -4142,3 +4714,277 @@ class ProtocolEngine(OptimizeCompletionMixin, AIProvidersMixin):
             }
         except Exception:
             return {"func": "wiki_update_reminder", "success": True, "action": "skipped", "message": "Could not check wiki config."}
+
+    # ------------------------------------------------------------------
+    # Review dispatch classifier (CR-2 minimal gate, m-gstack-agent-roster)
+    # ------------------------------------------------------------------
+
+    def _read_review_dispatch_config(self) -> Dict[str, bool]:
+        """Read the three code_review.*_enabled gates (absent/unreadable -> True)."""
+        review_cfg: Dict[str, Any] = {}
+        config_file = self.project_root / "team-management" / "config.json"
+        if config_file.exists():
+            try:
+                loaded = json.loads(config_file.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict) and isinstance(loaded.get("code_review"), dict):
+                    review_cfg = loaded["code_review"]
+            except (json.JSONDecodeError, OSError, ValueError):
+                review_cfg = {}
+        return {
+            "testing-specialist": review_cfg.get("testing_specialist_enabled", True) is not False,
+            "code-cleanliness": review_cfg.get("cleanliness_enabled", True) is not False,
+            "red-team": review_cfg.get("red_team_enabled", True) is not False,
+        }
+
+    @staticmethod
+    def _is_docs_config_path(path_str: str) -> bool:
+        """True when a repo-relative path is docs/config by extension or top-level
+        docs/ location. Deterministic by design — never inspects file content."""
+        norm = path_str.replace("\\", "/")
+        if norm.startswith("docs/"):
+            return True
+        return Path(norm).suffix.lower() in _DOCS_CONFIG_SUFFIXES
+
+    @staticmethod
+    def _is_framework_path(path_str: str) -> bool:
+        """True when a repo-relative path lies inside the framework's own working
+        tree (task files, protocol state, the agy read-only gate).
+
+        Matched on the FIRST `/`-delimited component, so a project file at
+        `src/team-management/x.py` is not mistaken for framework bookkeeping.
+
+        Deliberately does NOT normalize backslashes the way the sibling
+        `_is_docs_config_path` does. Git emits forward-slash paths on every
+        platform, so normalizing buys nothing — while on POSIX a backslash is a
+        legal FILENAME character, so collapsing it would read a project file
+        literally named `team-management\\large.py` as framework bookkeeping and
+        silently drop it from the measurement. The predicate's other blind spots
+        (a `./` prefix, a leading slash — neither reachable from `-z` git output)
+        fail toward OVER-counting and therefore more review; normalization was
+        the one that failed the other way, toward under-dispatch. One accepted
+        blind spot does fail that way: a repo-root FILE named exactly
+        `team-management`, `.claude` or `.agents` contains no `/`, so the whole
+        name is the first component and it is excluded. The list is
+        illustrative, not exhaustive — an already-prefixed path (a monorepo
+        subdirectory, where `git diff --numstat` emits repo-root-relative paths
+        while `git ls-files --others` emits cwd-relative ones) and a
+        case-variant spelling both read as project content, and both over-count.
+
+        The sibling `_is_docs_config_path` still normalizes and therefore carries
+        the SAME latent defect — a POSIX file named `docs\\thing.py` classifies as
+        docs and can hold `docs_config_only` true, suppressing the specialists.
+        It is left untouched because fixing it is a separate change, not because
+        it is somehow different.
+
+        Accepted limitation: the roots are excluded WHOLESALE, so user-authored
+        custom protocols and funcs under `team-management/protocol-configs/custom/`
+        are excluded too — a change consisting only of those measures as an empty
+        diff and summons no chain specialist. The mandatory code-review agent is
+        not classifier-gated and still runs.
+        """
+        return path_str.split("/", 1)[0] in _FRAMEWORK_PATH_ROOTS
+
+    def _measure_review_diff(self) -> "tuple[int, bool, int]":
+        """Measure the task diff: added+deleted from git diff HEAD --numstat
+        --no-renames (binary rows count 0; --no-renames so rename rows never
+        render `{old => new}` paths that escape the suffix check) plus line
+        counts of untracked files (NUL-sniffed binaries count 0).
+
+        Paths inside the framework's own working tree (_FRAMEWORK_PATH_ROOTS) are
+        excluded from the count AND from the docs/config-only path set, and their
+        lines are tallied separately so the dispatch telemetry can report what was
+        dropped. Returns (diff_lines, docs_config_only, framework_lines). Raises
+        on git failure."""
+        diff_lines = 0
+        framework_lines = 0
+        paths: List[str] = []
+        # -z on both commands: NUL-delimited records carry every path VERBATIM
+        # (no C-quoting, no mangling of names with edge whitespace/quotes/
+        # newlines) — the classifier must never under-measure a valid file
+        # because of its name.
+        proc = subprocess.run(
+            ["git", "diff", "HEAD", "--numstat", "--no-renames", "-z"],
+            stdin=subprocess.DEVNULL, capture_output=True, text=True,
+            cwd=str(self.project_root), timeout=GIT_TIMEOUT_MEDIUM, check=False,
+        )
+        if proc.returncode != 0:
+            raise RuntimeError(f"git diff failed: {proc.stderr.strip()[:200]}")
+        for entry in proc.stdout.split("\0"):
+            parts = entry.split("\t", 2)
+            if len(parts) < 3:
+                continue
+            added, deleted, path = parts[0], parts[1], parts[2]
+            row_lines = 0
+            if added.isdigit():
+                row_lines += int(added)
+            if deleted.isdigit():
+                row_lines += int(deleted)
+            if self._is_framework_path(path):
+                framework_lines += row_lines
+                continue
+            diff_lines += row_lines
+            paths.append(path)
+        proc = subprocess.run(
+            ["git", "ls-files", "--others", "--exclude-standard", "-z"],
+            stdin=subprocess.DEVNULL, capture_output=True, text=True,
+            cwd=str(self.project_root), timeout=GIT_TIMEOUT_MEDIUM, check=False,
+        )
+        if proc.returncode != 0:
+            raise RuntimeError(f"git ls-files failed: {proc.stderr.strip()[:200]}")
+        for rel in proc.stdout.split("\0"):
+            if not rel:
+                continue
+            is_framework = self._is_framework_path(rel)
+            if not is_framework:
+                paths.append(rel)
+            row_lines = 0  # reset per iteration, matching the numstat loop above
+            fpath = self.project_root / rel
+            try:
+                # Skip FIFOs/sockets/devices — open() on a FIFO blocks until a
+                # writer connects, hanging the pre_func (never-block contract).
+                if not fpath.is_file():
+                    continue  # non-regular file — counts 0 lines
+                with fpath.open("rb") as fh:
+                    if b"\0" in fh.read(8192):
+                        continue  # binary — counts 0 lines
+                with fpath.open("r", encoding="utf-8", errors="replace") as fh:
+                    row_lines = sum(1 for _ in fh)
+            except OSError:
+                continue
+            # Route AFTER the guards, so an excluded FIFO/binary/unreadable file
+            # contributes 0 to the excluded tally exactly as it contributes 0 to
+            # the measured one — one counting path, no duplicated safety logic.
+            if is_framework:
+                framework_lines += row_lines
+            else:
+                diff_lines += row_lines
+        docs_config_only = bool(paths) and all(self._is_docs_config_path(p) for p in paths)
+        return diff_lines, docs_config_only, framework_lines
+
+    def _append_dispatch_log(
+        self,
+        dispatch: Dict[str, Dict[str, Any]],
+        enabled: Dict[str, bool],
+        diff_lines: int,
+        docs_config_only: bool,
+        framework_lines: int,
+    ) -> Optional[str]:
+        """Append one JSONL record per agent evaluation to the project-scoped
+        cost log. Best-effort: returns a warning string on failure, never raises."""
+        try:
+            task_state = get_task_state() or {}
+            protocol_state = get_protocol_state() or {}
+            state_dir = self.project_root / ".claude" / "state"
+            state_dir.mkdir(parents=True, exist_ok=True)
+            ts = datetime.now(timezone.utc).isoformat()
+            with (state_dir / _REVIEW_DISPATCH_LOG_NAME).open("a", encoding="utf-8") as fh:
+                for agent in _REVIEW_DISPATCH_AGENTS:
+                    decision = dispatch[agent]
+                    record = {
+                        "ts": ts,
+                        "task": task_state.get("task"),
+                        "protocol": protocol_state.get("name"),
+                        "step": "code-review",
+                        "agent": agent,
+                        "diff_lines": diff_lines,
+                        "framework_lines_excluded": framework_lines,
+                        "docs_config_only": docs_config_only,
+                        "enabled": enabled.get(agent, True),
+                        "fired": decision["fire"],
+                        "reason": decision["reason"],
+                    }
+                    fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+            return None
+        except Exception as e:  # telemetry is best-effort — never raises
+            return f"dispatch log append failed: {e}"
+
+    def _func_classify_review_dispatch(self, args: Dict = None) -> Dict:
+        """Deterministic diff classifier for the code-review step's specialist
+        dispatch (CR-2 minimal gate).
+
+        Decides which chain specialists the orchestrator dispatches, from diff
+        size alone: testing-specialist and code-cleanliness at DIFF_LINES >= 50
+        and never on a docs/config-only diff; red-team at > 200 changed lines.
+        The red-team CRITICAL-first-round-finding trigger is orchestrator-owned
+        (round-1 findings do not exist when this pre_func runs). Any failure
+        degrades to skip-all-specialists with success=True — the mandatory
+        code-review agent must never be blocked by this classifier.
+        """
+        # Config read is decidable without measurement — do it outside the
+        # measurement try so the error-path telemetry keeps the real enabled
+        # map (and a config-disabled agent reads "disabled-by-config" even
+        # when git measurement fails).
+        try:
+            enabled = self._read_review_dispatch_config()
+        except Exception:
+            enabled = {agent: True for agent in _REVIEW_DISPATCH_AGENTS}
+        try:
+            diff_lines, docs_config_only, framework_lines = self._measure_review_diff()
+
+            def decide(agent: str, threshold: int, strict_above: bool, docs_gated: bool) -> Dict[str, Any]:
+                if not enabled[agent]:
+                    return {"fire": False, "reason": "disabled-by-config"}
+                if diff_lines == 0:
+                    return {"fire": False, "reason": "empty-diff"}
+                if docs_gated and docs_config_only:
+                    return {"fire": False, "reason": "docs-config-only"}
+                if strict_above:
+                    if diff_lines <= threshold:
+                        return {"fire": False, "reason": f"below-threshold ({diff_lines} <= {threshold})"}
+                elif diff_lines < threshold:
+                    return {"fire": False, "reason": f"below-threshold ({diff_lines} < {threshold})"}
+                return {"fire": True, "reason": f"fired ({diff_lines} lines)"}
+
+            dispatch = {
+                "testing-specialist": decide("testing-specialist", _SPECIALIST_MIN_DIFF_LINES, False, True),
+                "code-cleanliness": decide("code-cleanliness", _SPECIALIST_MIN_DIFF_LINES, False, True),
+                "red-team": decide("red-team", _RED_TEAM_MIN_DIFF_LINES, True, False),
+            }
+        except Exception as e:  # classifier must never block the review step
+            reason = f"classifier-error: {str(e)[:200]}"
+            dispatch = {
+                agent: {"fire": False,
+                        "reason": reason if enabled.get(agent, True) else "disabled-by-config"}
+                for agent in _REVIEW_DISPATCH_AGENTS
+            }
+            diff_lines, docs_config_only, framework_lines = 0, False, 0
+
+        result: Dict[str, Any] = {
+            "func": "classify_review_dispatch",
+            "success": True,
+            "diff_lines": diff_lines,
+            "framework_lines_excluded": framework_lines,
+            "docs_config_only": docs_config_only,
+            "dispatch": dispatch,
+        }
+        warning = self._append_dispatch_log(
+            dispatch, enabled, diff_lines, docs_config_only, framework_lines)
+        if warning:
+            result["warnings"] = [warning]
+        fired = [agent for agent in _REVIEW_DISPATCH_AGENTS if dispatch[agent]["fire"]]
+        first_round = [a for a in ("testing-specialist", "code-cleanliness") if dispatch[a]["fire"]]
+        red_team = dispatch["red-team"]
+        if red_team["reason"] == "disabled-by-config":
+            # The explicit opt-out wins over BOTH §2a triggers — the prose
+            # channel must never contradict the sub-protocol rule.
+            second_echelon = (
+                "Second echelon (Section 2a): red-team DISABLED by config "
+                "(code_review.red_team_enabled: false) — never dispatch it, "
+                "even on a Critical finding."
+            )
+        else:
+            second_echelon = (
+                f"Second echelon (Section 2a): red-team "
+                f"{'FIRES' if red_team['fire'] else 'not fired'} by the size trigger — "
+                f"ALSO fire it if any Critical appears in the merged round-1 findings "
+                f"(record the canonical DISPATCH note on that path)."
+            )
+        result["instructions"] = (
+            f"[Review dispatch classifier] diff_lines={diff_lines}"
+            f"{' (docs/config-only)' if docs_config_only else ''}; "
+            f"fire: {', '.join(fired) if fired else 'none'}. "
+            f"First round (Section 2, SAME message as code-review + providers): "
+            f"{', '.join(first_round) if first_round else 'no extra specialists'}. "
+            f"{second_echelon}"
+        )
+        return result

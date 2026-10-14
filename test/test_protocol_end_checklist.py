@@ -24,6 +24,7 @@ PROTOCOL_FILES = (
     "refactoring.json",
     "optimize.json",
     "optimize-unattended.json",
+    "retro.json",
 )
 
 CHECKBOX_MARKER = "- [ ]"

@@ -11,7 +11,8 @@ from shared_state import (
     parse_task_frontmatter, _write_json_durable, ensure_task_template_deployed,
     ensure_provider_tokens_file, ensure_claude_dir_gitignored,
     ensure_guidance_deployed_and_wired,
-    ensure_agy_readonly_gate_deployed, _agy_enabled
+    ensure_agy_readonly_gate_deployed, _agy_enabled,
+    agy_permission_rules_present
 )
 from boot_detector import detect_legacy_install
 
@@ -201,6 +202,48 @@ try:
             gemini_replaced_flag.write_text('warned\n', encoding='utf-8')
 except (AttributeError, TypeError, OSError):
     # Best-effort warning — never block session start on a malformed config.
+    pass
+
+# Banner half of the update notice — set below, emitted as the top-level
+# `systemMessage` at the very end. Initialised here so the emit site is safe
+# even if the guarded block below fails.
+_update_banner = None
+
+# Same contract for the agy setup banner, which is assigned three `if`s deep in the
+# plugin block below. Initialising it here lets the shared emit site read it as an
+# ordinary variable; without this it needed a `globals().get(...)` lookup to survive
+# the common case where the block never runs (cleanliness review, round 5).
+_agy_setup_banner = None
+
+# Emit the plugin-update notice from the shipped CHANGELOG.md. Unlike the
+# migration flags above (cleared every session start -> fire once per SESSION),
+# the last-seen marker is PERSISTENT and is never cleared here — the notice
+# fires once per plugin UPDATE. Marker lives in CLAUDE_PLUGIN_DATA (global per
+# user per plugin; survives updates) with a per-project .claude/state fallback
+# for dev/legacy runs where the env var is unset. Best-effort: the import and
+# the call are both inside the guard, and the notice is APPENDED to `context`
+# (never printed separately — the hook emits a single JSON document at the end).
+try:
+    from update_notice import build_update_notice
+    from shared_state import get_plugin_data
+    # tm- prefix guards against filename collisions with other plugins/tools
+    # sharing the same directory (user request, m-plugin-update-changelog).
+    _plugin_data = get_plugin_data()
+    if _plugin_data is not None:
+        _update_marker = _plugin_data / 'tm-last-seen-version.json'
+    else:
+        _update_marker = PROJECT_ROOT / '.claude' / 'state' / 'tm-last-seen-version.json'
+    _update_notice = build_update_notice(get_plugin_root(), _update_marker)
+    if _update_notice:
+        # Hybrid delivery: the full sections go to the model as context, the
+        # short banner goes to the USER as `systemMessage`. additionalContext
+        # alone is not a delivery guarantee — the model cannot speak first and
+        # may spend its first reply on the user's own request, while the marker
+        # is already synced (one-shot spent).
+        context += "\n" + _update_notice["context"] + "\n"
+        _update_banner = _update_notice["banner"]
+except Exception:
+    # Never block session start on the update notice.
     pass
 
 # Check if sessions directory exists
@@ -552,10 +595,37 @@ if is_plugin_mode():
         ensure_guidance_deployed_and_wired(PROJECT_ROOT, _plugin_root, _wiki_enabled)
         # Deploy the agy read-only PreToolUse deny-gate into the project whenever agy
         # is an enabled provider, so `.agents/hooks.json` is present and the agy-cli
-        # wrapper's `--dangerously-skip-permissions` review runs CONTAINED. Merge-aware
+        # wrapper's headless review runs CONTAINED. Merge-aware
         # (never clobbers a user's own .agents hooks); best-effort.
         if _agy_enabled(_cfg_data):
             ensure_agy_readonly_gate_deployed(PROJECT_ROOT, _plugin_root)
+            # agy is enabled but its headless permission rules may be missing. That
+            # combination does not fail loudly — agy starts, every command it tries is
+            # auto-denied (headless has no prompt to answer), and it returns an empty
+            # or content-free review that reads like a clean one. Say so here rather
+            # than letting a review step discover it. NOT auto-fixed: the rules live in
+            # the user's GLOBAL agy config, so writing them needs consent and belongs
+            # to /team-management:config. Re-emitted every session while the condition
+            # holds — it is a live misconfiguration, and it clears itself once fixed.
+            if not agy_permission_rules_present():
+                # Hybrid delivery, mirroring the update notice: the action item is
+                # the USER's (run a slash command), and `additionalContext` is
+                # model-only with no delivery guarantee — a notice they never see
+                # leaves agy silently contributing nothing to every review.
+                _agy_setup_banner = (
+                    "[team-management] agy is enabled but its permission rules are "
+                    "missing — it will return empty reviews. Run "
+                    "/team-management:config to add them (one-time per machine)."
+                )
+                context += (
+                    "\n\n[agy — setup required] agy is enabled, but its headless "
+                    "permission rules are missing from ~/.gemini/antigravity-cli/"
+                    "settings.json. Without them agy auto-denies every command it "
+                    "tries and returns an empty review. Fix: run "
+                    "/team-management:config (one-time per machine) — it adds "
+                    "read-only allow rules for git and the read commands. The "
+                    "project's read-only deny-gate still bounds what agy may do."
+                )
     # Boot-detector advisory.
     _legacy = detect_legacy_install(PROJECT_ROOT)
     if _legacy:
@@ -574,4 +644,10 @@ output = {
         "additionalContext": context
     }
 }
+# `systemMessage` is the universal hook-output field Claude Code shows directly
+# to the user — the only deterministic channel a hook has. Emitted only on an
+# actual update so a normal session start stays quiet.
+_banners = [b for b in (_update_banner, _agy_setup_banner) if b]
+if _banners:
+    output["systemMessage"] = "\n\n".join(_banners)
 print(json.dumps(output))

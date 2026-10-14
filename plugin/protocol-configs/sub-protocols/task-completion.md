@@ -22,13 +22,36 @@ If neither applies, the task has verification gaps — `protocol_goto(step_name=
 ## 1. Present Changes for User Testing
 
 Summarize what was implemented:
-- List all success criteria and their completion status
+- List all success criteria with their per-item status and Verification Mode from the FINAL spec-compliance review (`DONE` or `UNVERIFIABLE [<mode>]` — `PARTIAL` / `NOT DONE` / `CHANGED` never reach this step; they fail the code-review gate). After compaction this list is reconstructible from the notes alone: the strict verdict guarantees every criterion outside the carriage note's set is `DONE`, and the noted items are the UNVERIFIABLE set (per-item mode tags are presentational — include them when the final review is still in context). Items the final review marked `DEFERRED` are listed in the latest `SPEC_DEFERRED:` note. They are `DONE` here only when a `SPEC_DEFERRED: PASSED` note is newer than a `SPEC_DEFERRED:` list that is itself at-or-after the latest `SPEC_REVIEW: PASSED` — unless that re-audit added them to the UNVERIFIABLE set; an unconfirmed deferred item goes to Section 1b
 - List all files modified/created
 - Highlight any notable decisions or trade-offs made during implementation
 
 Ask the user to test the changes.
 
 **MANDATORY: Notify the user** that their review is needed — they are likely not watching the terminal. Call `mcp__plugin_team-management_tm__notify_user` with a short summary of what was done and that you are waiting for their confirmation. Do this EVERY time you reach this step, without exception.
+
+## 1a. Per-Item Confirmation of UNVERIFIABLE Items (BEFORE any generic confirmation)
+
+Criteria that passed the spec audit as `UNVERIFIABLE` have their evidence outside the diff (external state, another repo, semantic content quality). They MUST be confirmed by the user one by one, BEFORE the generic confirmation of Section 3. **Blanket confirmation is prohibited for these items** — a global "everything works" / "LGTM" does NOT cover them.
+
+0. **Scope.** This section applies to protocols whose code-review step records the `SPEC_REVIEW: PASSED` sentinel (the spec-compliance stage) — currently ALL FOUR shipped consumers of this sub-protocol: `task`, `refactoring`, `optimize`, `optimize-unattended`. Only a custom-fork protocol without that stage produces no UNVERIFIABLE classifications — skip this section there.
+1. **Find the set.** Source of truth: the latest `SPEC_UNVERIFIABLE:` note in the protocol log (`mcp__plugin_team-management_tm__protocol_log`). **Staleness check first:** a carriage note is valid only if recorded at-or-after the latest `SPEC_REVIEW: PASSED` note (every spec-audit PASS saves both, carriage second; note timestamps are in the log). Then resolve by case:
+   - **Fresh `SPEC_UNVERIFIABLE: none`** → no UNVERIFIABLE items; skip this section.
+   - **Fresh note with SC-IDs** → that is the set. ALSO read the work-log carry-list (recorded at PASS time for every non-empty set): it carries each item's Verification Mode, why it is unverifiable, and what the user should check — step 2's questions must name these; the criterion text itself is in the task file's `## Success Criteria`. A fresh ID note WITHOUT a matching carry-list is an audit-data inconsistency — Section 1b applies.
+   - **Fresh `SPEC_UNVERIFIABLE: legacy — see work log`** (tasks without SC IDs) → the carry-list IS the set; missing → audit-data inconsistency — Section 1b applies.
+   - **STALE note** (a carriage note OLDER than the latest sentinel belongs to a superseded round) → the interruption that orphaned the sentinel also predates the carry-list, so BOTH are superseded — serve neither; Section 1b applies directly (re-run the audit or ask).
+   - **No note at all** → fall back to the work-log carry-list alone (pre-feature / lost-log runs). Neither note nor carry-list → do NOT assume an empty set: a forgotten carriage note is indistinguishable from a pre-feature run, so Section 1b applies — its explicit question is where the user may knowingly answer "proceed — this review pre-dates the carriage contract".
+2. **1–3 items** → ONE `AskUserQuestion` call with one question per item. Each question quotes the criterion, names its Verification Mode (WHY the diff cannot prove it), and says what the user should check. Options: "Confirmed — verified externally" (first) / "Not confirmed — needs work".
+3. **More than 3 items** → ONE `AskUserQuestion` call using `multiSelect: true` — "select the items you have verified" — one option per item, grouped into questions of at most 4 options each and at most 4 questions per call (widget limits: 16 items max per call), instead of a series of single-item calls. **More than 16 items** → successive multiSelect calls of up to 16 items each, every item still resolved individually.
+4. **Every not-confirmed item** → either `mcp__plugin_team-management_tm__protocol_goto(step_name="implementation")` to close it, or the user explicitly accepts it as known-unverified — record the acceptance per-item in the task's `## User Notes` and the work log. Do NOT advance with an unconfirmed item that has neither resolution.
+
+## 1b. Fail-Open Prohibition (audit failure ≠ audit pass)
+
+If a completion audit that was supposed to run for this protocol fails to RUN — the per-SC status list cannot be produced (e.g. no final spec review evidence in the work log AND no usable `SPEC_UNVERIFIABLE:` / `SPEC_REVIEW:` notes in the protocol log), a completion-time verification command errors out rather than failing, or **Section 1a routed here** (missing/inconsistent carriage data — this routing applies even when other audit evidence exists) — NEVER proceed as if it passed. Raise an explicit `AskUserQuestion` with **"Stop and fix"** as the recommended first option (diagnose why the audit could not run, then re-run it). A silent pass is prohibited.
+
+Distinguish the two failure kinds:
+- **The audit ran and FAILED** (spec review FAIL, tests red) → the normal fix loop: `protocol_goto` back to implementation / re-run the review.
+- **The audit COULD NOT RUN** (agent crash, missing report, errored command) → this section's explicit question. Absence of a verdict is not a verdict.
 
 ## 2. User Testing Phase
 
@@ -44,6 +67,8 @@ The user tests the implementation. During this phase:
 Wait for explicit user confirmation. Acceptable confirmations:
 - "Everything works", "looks good", "approved", "ship it", "LGTM"
 - Any clear positive confirmation
+
+These generic confirmations cover the overall change-set and are acceptable ONLY after the per-item confirmations of Section 1a have been collected (when UNVERIFIABLE items exist) — a generic confirmation never substitutes for them.
 
 **NOT acceptable**:
 - Silence or no response

@@ -1460,7 +1460,7 @@ class OptimizeCompletionMixin:
         try:
             proc = subprocess.run(
                 ["git", "log", "--name-only", "--pretty=format:%H", f"{baseline_commit}..HEAD"],
-                capture_output=True, text=True, timeout=60,
+                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60,
                 cwd=str(self.project_root),
                 check=False,
             )
@@ -1497,7 +1497,7 @@ class OptimizeCompletionMixin:
                                 "frozen_pattern": fp,
                                 "detail": "frozen path was edited — workflow guard violated",
                             })
-        except (OSError, subprocess.TimeoutExpired) as e:
+        except (OSError, ValueError, subprocess.TimeoutExpired) as e:
             return {
                 "func": "policy_compliance_audit",
                 "success": True,
@@ -1510,7 +1510,7 @@ class OptimizeCompletionMixin:
             try:
                 proc = subprocess.run(
                     ["git", "log", "-p", f"{baseline_commit}..HEAD"],
-                    capture_output=True, text=True, timeout=60,
+                    capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60,
                     cwd=str(self.project_root),
                     check=False,
                 )
@@ -1528,7 +1528,7 @@ class OptimizeCompletionMixin:
                                 })
                                 # One hit is enough to flag; further hits add noise
                                 break
-            except (OSError, subprocess.TimeoutExpired):
+            except (OSError, ValueError, subprocess.TimeoutExpired):
                 pass
 
         return {

@@ -44,11 +44,11 @@
             "name": "code-review",
             "description": "Spec compliance review + code quality review. Sentinel SPEC_REVIEW: PASSED required before advance. Summary must evidence verification. verify_tests_pass deliberately omitted: the refactoring protocol tolerates pre-existing baseline failures (test-verify step diffs against the baseline), while verify_tests_pass requires exit 0 and would permanently block dirty-baseline codebases.",
             "mode": "implementation",
-            "pre_funcs": ["resolve_ai_providers", "require_spec_review_passed"],
-            "post_funcs": ["require_spec_review_passed", "check_completion_evidence", "validate_code_review_in_worklog", "validate_no_critical_issues_in_worklog"],
+            "pre_funcs": ["resolve_ai_providers", "classify_review_dispatch"],
+            "post_funcs": ["verify_review_round", "require_spec_review_passed", "check_completion_evidence", "validate_code_review_in_worklog", "validate_no_critical_issues_in_worklog"],
             "post_funcs_stop_on_failure": true,
             "start": "@sub-protocols/code-review.md",
-            "end": "Advance when:\n- [ ] Code review passes with zero critical issues.\n- [ ] Warnings: strict (enforce_warnings=true) → zero warnings, fix and re-review until clean; relaxed (false or not set) → documented, non-blocking.\n- [ ] Final passing review appended to the task work log in the exact format '# Code Review: [Title]' with Summary, Critical Issues, Warnings, and Notes sections."
+            "end": "Advance when:\n- [ ] Latest REVIEW_ROUND note matches the current tree — no code change after the final round.\n- [ ] Code review passes with zero critical issues.\n- [ ] Warnings: strict (enforce_warnings=true) → zero confirmed warnings (defects); relaxed (false or not set) → documented, non-blocking. Notes never block.\n- [ ] Final passing review appended to the task work log in the exact format '# Code Review: [Title]' with Summary, Critical Issues, Warnings, and Notes sections.\n- [ ] Spec compliance audit passed on the final tree — SPEC_REVIEW: PASSED sentinel recorded after the last review round, followed by its SPEC_UNVERIFIABLE: and SPEC_DEFERRED: carriage notes."
         },
         {
             "name": "completion",

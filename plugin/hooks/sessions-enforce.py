@@ -20,15 +20,17 @@ Only exit code 2 blocks a PreToolUse tool call; any uncaught exception exits 1
 import json
 import os
 import re
+import secrets
 import shlex
 import sys
 import subprocess
+import time
 from pathlib import Path
 from shared_state import (
     get_task_state, get_project_root, get_plugin_root, find_git_repo,
     parse_task_frontmatter, check_workflow_bypass, check_daic_mode_raw,
     get_protocol_state, in_subagent_context, is_plugin_mode,
-    OPTIMIZE_STATE_FILE,
+    OPTIMIZE_STATE_FILE, _write_json_durable, ensure_state_dir,
 )
 from boot_detector import detect_legacy_install
 from hook_utils import command_is_read_only
@@ -198,6 +200,9 @@ PROTECTED_PATHS = [
     # the MCP server. Explicit so the secret file is a named, tested block, though the
     # .claude/state prefix above already subsumes it (h-fix-mcp-token-ondisk-bridge).
     ".claude/state/provider-tokens.json",
+    # Safety-guard confirmation nonce (h-gstack-safety-guards). Subsumed by the
+    # .claude/state prefix; explicit so the confirmation carrier is a named entry.
+    ".claude/state/safety-guard-confirm.json",
 ]
 
 # Bash command patterns that indicate write semantics. Hoisted from the
@@ -525,6 +530,499 @@ def _bash_targets_frozen(command: str, frozen: list) -> str:
     return ""
 
 
+# ============================================================================
+# SAFETY GUARDS (h-gstack-safety-guards) — destructive Bash command classifier
+# ============================================================================
+# Blocks destructive Bash commands (rm -rf, DROP TABLE/TRUNCATE, git push
+# --force, git reset --hard, git checkout/restore ., git clean -f, kubectl
+# delete, docker rm -f / system prune) behind an exit-2 block plus a two-step
+# typed confirmation carried by a nonce state file — the discard-gate pattern
+# with a new carrier, because a Bash hook has no advance-args channel.
+#
+# FRICTION GUARD, NOT A SECURITY CONTROL. The confirmation is replayable
+# within the same turn (like the discard gate) and `safety_guards.enabled` is
+# a UX toggle, not protection against a malicious agent. Known bypasses
+# (accepted v1, task User Notes): shell variables, command substitution,
+# bash -c / python -c embedded strings, find -exec, base64 piping, unexpanded
+# globs. Runs in the universal Bash-guard block so it binds subagents too;
+# the workflow bypass deliberately disables it (D6 — workflow friction
+# follows DAIC/branch/frozen semantics, unlike the secret token-bridge guard).
+
+SAFETY_CONFIRM_STATE_FILE = PROJECT_ROOT / ".claude" / "state" / "safety-guard-confirm.json"
+_SAFETY_CONFIRM_TTL_SECONDS = 600
+# secrets.token_hex(8) == exactly 16 lowercase hex chars; DOTALL so a
+# multi-line confirmed command binds in full.
+_SAFETY_CONFIRM_PREFIX_RE = re.compile(r'^SAFETY_CONFIRM=([0-9a-f]{16})\s+(.*)$', re.DOTALL)
+# Built-in whole-command allowlist: the ENTIRE (whitespace-normalized) command
+# must be `rm -rf` of well-known disposable build dirs — chains, comments, or
+# any extra text defeat it by design (SC-1 first-match-trick requirement).
+_SAFETY_ALLOWLIST_RE = re.compile(
+    r'^rm\s+-(?:rf|fr)\s+(?:(?:\./)?(?:node_modules|dist|build|__pycache__|\.cache|coverage)/?(?:\s+|$))+$'
+)
+_SQL_DESTRUCTIVE_RE = re.compile(r'\bDROP\s+(?:TABLE|DATABASE)\b|\bTRUNCATE\b', re.IGNORECASE)
+# Wrapper commands stripped before rule lookup so `sudo rm -rf /` classifies
+# as rm. After a wrapper, its own dash-flags (with separate value tokens for
+# the known value-taking flags below), and bare numeric/duration args are
+# also skipped (`nice -n 10 rm ...`, `timeout 5s rm ...`, `sudo -u root rm ...`).
+_WRAPPER_COMMANDS = {"sudo", "doas", "time", "nohup", "nice", "ionice", "command",
+                     "exec", "xargs", "env", "timeout", "gtimeout", "setsid",
+                     "stdbuf"}
+# Per-wrapper option flags that consume a SEPARATE value token. Skipping the
+# flag but not its value left the value looking like the wrapped command
+# (codex round-1: `sudo -u root rm -rf /` classified `root`, `xargs -I {}
+# rm -rf` classified `{}`). Deliberately per-wrapper, NOT a union — a union
+# would mis-consume same-spelled flags that take no value on another wrapper
+# (`sudo -n` is non-interactive, `nice -n` takes a value).
+_WRAPPER_VALUE_FLAGS = {
+    # Long forms that take a SEPARATE value are listed too — omitting them
+    # misparses the value as the wrapped command and silences classification
+    # entirely (`sudo --chdir /dir git reset --hard` → base `/dir`; review
+    # round-3 W1). `--preserve-env` is deliberately absent: its bare form
+    # takes no value.
+    "sudo": {"-u", "-g", "-h", "-p", "-C", "-D", "-R", "-T", "-U",
+             "--chdir", "--user", "--group"},
+    "doas": {"-u"},
+    "nice": {"-n", "--adjustment"},
+    "ionice": {"-c", "-n", "-p", "-P", "-u"},
+    "xargs": {"-I", "-i", "-a", "-d", "-E", "-e", "-L", "-l", "-n", "-P", "-s"},
+    "env": {"-u", "-S", "-C", "--unset", "--split-string", "--chdir"},
+    "time": {"-f", "-o", "--format", "--output"},
+    "timeout": {"-k", "-s", "--kill-after", "--signal"},
+    "gtimeout": {"-k", "-s", "--kill-after", "--signal"},
+    "stdbuf": {"-i", "-o", "-e"},
+}
+# Bare numeric/duration wrapper argument (`nice -n 10`, `timeout 5s`).
+_DURATION_TOKEN_RE = re.compile(r'^\d+(?:\.\d+)?[smhd]?$')
+# Wrapper flags that CHANGE DIRECTORY for the wrapped command (`env -C /other
+# git reset --hard`, `sudo -D /other ...`). Consuming them silently would let
+# the own-branch exception vouch for a command running in ANOTHER repo — the
+# exact class D5 exists to prevent (review round-2 W2). Per-wrapper: sudo -C
+# is closefrom (an fd number, NOT chdir) and must not be listed here.
+_WRAPPER_CHDIR_FLAGS = {
+    "env": {"-C", "--chdir"},
+    "sudo": {"-D", "--chdir"},
+}
+# docker global options that consume a separate value token — without
+# skipping them, `docker --context production rm -f app` reads `production`
+# as the subcommand and bypasses classification (codex round-1).
+_DOCKER_VALUE_FLAGS = {"--context", "--config", "--host", "-H",
+                       "--log-level", "-l", "--tlscacert", "--tlscert",
+                       "--tlskey"}
+# Reasons eligible for the own-branch exception (D4): reflog-recoverable git
+# ops only. Working-tree destruction (checkout/restore ., clean) is NOT
+# recoverable and never exempted.
+_REVERSIBLE_REASONS = {"git reset --hard", "git push --force"}
+# git global flags that take a separate value token; the foreign subset
+# retargets git at another repo/worktree and disables the own-branch
+# exception (D5 — the exception's checks inspect PROJECT_ROOT only).
+_GIT_VALUE_FLAGS = {"-C", "-c", "--git-dir", "--work-tree", "--exec-path", "--namespace"}
+_GIT_FOREIGN_FLAGS = {"-C", "--git-dir", "--work-tree"}
+
+
+def _split_bash_segments(command: str) -> list:
+    """Split on shell chain separators: `|`, `||`, `&`, `&&`, `;`, newline."""
+    return re.split(r'(?:\|\|?|&&?|;|\n)', command)
+
+
+def _has_short_flag(tokens, letter: str) -> bool:
+    """True when any single-dash combined-flag token carries LETTER."""
+    return any(
+        t.startswith('-') and not t.startswith('--') and letter in t[1:]
+        for t in tokens
+    )
+
+
+def _strip_wrapper_tokens(tokens: list):
+    """Drop leading env assignments (FOO=bar) and wrapper commands with their
+    flag arguments (separate value tokens consumed for the known
+    value-taking flags) and bare numeric/duration arguments.
+
+    Returns (remaining_tokens, foreign): foreign is True when a consumed
+    wrapper flag was a chdir-class flag (`env -C` / `--chdir`, `sudo -D`) —
+    the wrapped command runs in another directory, so the own-branch
+    exception must not vouch for it (D5, review round-2 W2)."""
+    i = 0
+    foreign = False
+    while i < len(tokens):
+        tok = tokens[i]
+        if re.match(r'^[A-Za-z_][A-Za-z0-9_]*=', tok):
+            i += 1
+            continue
+        base = Path(tok).name.lower()
+        if base in _WRAPPER_COMMANDS:
+            value_flags = _WRAPPER_VALUE_FLAGS.get(base, set())
+            chdir_flags = _WRAPPER_CHDIR_FLAGS.get(base, set())
+            i += 1
+            while i < len(tokens):
+                t = tokens[i]
+                if t.split('=', 1)[0] in chdir_flags:
+                    foreign = True
+                if t in value_flags and i + 1 < len(tokens):
+                    i += 2  # flag + its separate value token
+                elif t.startswith('-'):
+                    i += 1  # flag (attached-value forms included)
+                elif _DURATION_TOKEN_RE.match(t):
+                    i += 1  # numeric/duration arg (nice 10, timeout 5s)
+                else:
+                    break
+            continue
+        break
+    return tokens[i:], foreign
+
+
+def _subcommand_after_flags(rest: list, value_flags: set):
+    """First non-flag token after skipping option flags (with their separate
+    value tokens for VALUE_FLAGS entries used without '='). Returns
+    (subcommand, sub_rest)."""
+    i = 0
+    while i < len(rest):
+        tok = rest[i]
+        if not tok.startswith('-'):
+            return tok.lower(), rest[i + 1:]
+        flag = tok.split('=', 1)[0]
+        if flag in value_flags and '=' not in tok:
+            i += 2
+        else:
+            i += 1
+    return "", []
+
+
+def _git_subcommand(rest: list):
+    """Return (subcommand, sub_rest, foreign_repo) from tokens after `git`,
+    skipping global flags (with their value tokens where applicable)."""
+    foreign = False
+    i = 0
+    while i < len(rest):
+        tok = rest[i]
+        if not tok.startswith('-'):
+            return tok.lower(), rest[i + 1:], foreign
+        flag = tok.split('=', 1)[0]
+        if flag in _GIT_FOREIGN_FLAGS:
+            foreign = True
+        if flag in _GIT_VALUE_FLAGS and '=' not in tok:
+            i += 2
+        else:
+            i += 1
+    return "", [], foreign
+
+
+# Push modes whose scope cannot be vetted against the task branch — their
+# presence always denies the own-branch exception (codex R3: `git push --force
+# --all` would otherwise qualify vacuously with zero positional refspecs).
+_PUSH_BROAD_FLAGS = {"--all", "--branches", "--mirror", "--tags", "--prune",
+                     "--delete", "-d"}
+
+
+def _classify_segment(seg: str):
+    """Classify one chain segment.
+
+    Returns (reasons, push_refspecs, foreign_repo, bare_force_push).
+
+    Token-based per-command rules (word-boundary by construction: rules key on
+    the exact command basename and exact flag/argument tokens), plus a raw-text
+    SQL regex that is parse-independent. Unparseable quoting degrades to a
+    whitespace split and is still scanned — destructive tokens stay detectable
+    when shell parsing fails (SC-3, narrowed per task decision D11; the
+    literal any-unparseable-blocks reading was rejected as a heredoc FP storm)."""
+    reasons = []
+    push_refspecs = []
+    foreign = False
+    bare_force_push = False
+
+    if _SQL_DESTRUCTIVE_RE.search(seg):
+        reasons.append("SQL DROP/TRUNCATE")
+
+    try:
+        tokens = shlex.split(seg)
+    except ValueError:
+        tokens = seg.split()
+    tokens, wrapper_foreign = _strip_wrapper_tokens(tokens)
+    foreign = foreign or wrapper_foreign
+    if not tokens:
+        return reasons, push_refspecs, foreign, bare_force_push
+
+    base = Path(tokens[0].lstrip('\\')).name.lower()
+    rest = tokens[1:]
+
+    if base == 'cd':
+        # A cd segment means later segments may act on ANOTHER repo — the
+        # own-branch exception cannot vouch for it (D5).
+        foreign = True
+    elif base == 'rm':
+        recursive = ('--recursive' in rest or _has_short_flag(rest, 'r')
+                     or _has_short_flag(rest, 'R'))
+        force = '--force' in rest or _has_short_flag(rest, 'f')
+        if recursive and force:
+            reasons.append("rm -rf")
+    elif base == 'git':
+        sub, sub_rest, git_foreign = _git_subcommand(rest)
+        foreign = foreign or git_foreign
+        if sub == 'push':
+            if ('--force' in sub_rest or _has_short_flag(sub_rest, 'f')
+                    or any(t.startswith('--force-with-lease') for t in sub_rest)):
+                reasons.append("git push --force")
+                positional = [t for t in sub_rest if not t.startswith('-')]
+                # positional[0] is the remote; the rest are refspecs the
+                # own-branch exception must vet (D4).
+                refspecs = positional[1:]
+                push_refspecs.extend(refspecs)
+                # Broad push modes are unvettable — feed the flag itself into
+                # the refspec check so the exception's part-vetting fails it.
+                # `-d` is also caught inside a combined short token (`-fd`);
+                # exact-token-only matching left that spelling exempt while
+                # `-f -d` was denied (review round-2 W1).
+                broad = [t for t in sub_rest if t in _PUSH_BROAD_FLAGS]
+                if _has_short_flag(sub_rest, 'd'):
+                    broad.append('-d')
+                push_refspecs.extend(broad)
+                if not refspecs and not broad:
+                    # `git push --force` with no explicit refspec: scope
+                    # depends on push.default — vetted by the exception (D12).
+                    bare_force_push = True
+        elif sub == 'reset':
+            if '--hard' in sub_rest:
+                reasons.append("git reset --hard")
+        elif sub in ('checkout', 'restore'):
+            # `--` starts with `-` and is naturally excluded; pathspecs after
+            # it (e.g. `git checkout -- .`) survive as positionals.
+            paths = [t for t in sub_rest if not t.startswith('-')]
+            if any(t in ('.', './') for t in paths):
+                reasons.append(f"git {sub} .")
+        elif sub == 'clean':
+            # Combined spellings (`git clean -fdn`) are dry runs too — the
+            # documented guarantee is "dry-run stays allowed", so `n` gets
+            # the same combined-short-flag handling as `f` (codex round-3).
+            dry_run = '--dry-run' in sub_rest or _has_short_flag(sub_rest, 'n')
+            force = '--force' in sub_rest or _has_short_flag(sub_rest, 'f')
+            if force and not dry_run:
+                reasons.append("git clean -f")
+    elif base == 'kubectl':
+        # Greedy: any bare `delete` token counts — kubectl global flags take
+        # values (-n NS, --context X), so positional detection is unreliable.
+        # A resource literally named "delete" is an accepted false positive.
+        if any(t.lower() == 'delete' for t in rest if not t.startswith('-')):
+            reasons.append("kubectl delete")
+    elif base == 'docker':
+        sub, sub_rest = _subcommand_after_flags(rest, _DOCKER_VALUE_FLAGS)
+        if sub == 'container':
+            # `docker container rm` is the canonical alias of `docker rm`
+            # (codex round-2) — descend one management level.
+            sub, sub_rest = _subcommand_after_flags(sub_rest, set())
+        if sub == 'rm':
+            # `--force=<bool>` is valid docker syntax; any explicit value is
+            # treated as force (a `--force=false` FP merely costs one
+            # confirmation — the accepted safe-side posture).
+            if ('--force' in sub_rest
+                    or any(t.startswith('--force=') for t in sub_rest)
+                    or _has_short_flag(sub_rest, 'f')):
+                reasons.append("docker rm -f")
+        elif sub == 'system':
+            nested = [t for t in sub_rest if not t.startswith('-')]
+            if nested and nested[0].lower() == 'prune':
+                reasons.append("docker system prune")
+
+    return reasons, push_refspecs, foreign, bare_force_push
+
+
+def _classify_command(command: str, sensitivity: str) -> dict:
+    """Segment-aware destructive classification of a full Bash command."""
+    reasons = []
+    push_refspecs = []
+    foreign = False
+    bare_force_push = False
+    for seg in _split_bash_segments(command):
+        seg = seg.strip()
+        if not seg:
+            continue
+        seg_reasons, seg_refspecs, seg_foreign, seg_bare = _classify_segment(seg)
+        reasons.extend(seg_reasons)
+        push_refspecs.extend(seg_refspecs)
+        foreign = foreign or seg_foreign
+        bare_force_push = bare_force_push or seg_bare
+    if sensitivity == 'warn-all' and not reasons:
+        if any(re.search(p, command) for p in BASH_WRITE_PATTERNS):
+            reasons.append("write-pattern command (warn-all)")
+    return {"reasons": reasons, "push_refspecs": push_refspecs,
+            "foreign_repo": foreign, "bare_force_push": bare_force_push}
+
+
+def _matches_safety_allowlist(command: str, extra_allowlist: list) -> bool:
+    """Whole-command allowlist: built-in disposable-dir rm regex plus exact
+    (whitespace-normalized) user-configured command strings."""
+    norm = " ".join(command.split())
+    if _SAFETY_ALLOWLIST_RE.match(norm):
+        return True
+    extras = {" ".join(e.split()) for e in extra_allowlist
+              if isinstance(e, str) and e.strip()}
+    return norm in extras
+
+
+def _own_branch_exception(classification: dict, sensitivity: str) -> bool:
+    """D4/D5: every finding is a reflog-recoverable git op on the task's own
+    feature branch with no remote-tracking ref. Local-only git checks; ANY
+    failure → False (fail toward blocking)."""
+    if sensitivity != 'warn-destructive-only':
+        return False
+    if classification["foreign_repo"]:
+        return False
+    reasons = classification["reasons"]
+    if not reasons or not all(r in _REVERSIBLE_REASONS for r in reasons):
+        return False
+    task_branch = (get_task_state().get("branch") or "").strip()
+    if not task_branch or task_branch.lower() in BRANCHLESS_SENTINELS:
+        return False
+    for refspec in classification["push_refspecs"]:
+        for part in refspec.lstrip('+').split(':'):
+            # An empty part (`:branch` delete-refspec) fails this check too.
+            if part not in (task_branch, 'HEAD'):
+                return False
+    try:
+        current = subprocess.run(
+            ["git", "branch", "--show-current"],
+            stdin=subprocess.DEVNULL, capture_output=True, text=True,
+            timeout=5, check=False, cwd=str(PROJECT_ROOT),
+        )
+        if current.returncode != 0 or current.stdout.strip() != task_branch:
+            return False
+        # Any remote-tracking ref for the branch (any remote, incl. file://)
+        # counts as shared — conservative, no network.
+        tracking = subprocess.run(
+            ["git", "for-each-ref", f"refs/remotes/*/{task_branch}"],
+            stdin=subprocess.DEVNULL, capture_output=True, text=True,
+            timeout=5, check=False, cwd=str(PROJECT_ROOT),
+        )
+        if tracking.returncode != 0 or tracking.stdout.strip():
+            return False
+        if classification.get("bare_force_push"):
+            # A refspec-less `git push --force` is scoped by push.default:
+            # simple/current (and unset, which defaults to simple since git
+            # 2.0) push only the current branch; matching & co. can force-push
+            # OTHER branches, so the exception is withheld (codex R3 / D12).
+            # rc 0 → value must be simple/current; rc 1 → key unset (simple
+            # default); any other rc is a git ERROR → fail toward blocking
+            # per D4 (review round-1 note).
+            cfg = subprocess.run(
+                ["git", "config", "push.default"],
+                stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                timeout=5, check=False, cwd=str(PROJECT_ROOT),
+            )
+            if cfg.returncode == 0:
+                if cfg.stdout.strip() not in ("simple", "current"):
+                    return False
+            elif cfg.returncode != 1:
+                return False
+    except (subprocess.TimeoutExpired, subprocess.SubprocessError, OSError):
+        return False
+    return True
+
+
+def _load_safety_confirm_state() -> dict:
+    try:
+        with open(SAFETY_CONFIRM_STATE_FILE, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (FileNotFoundError, json.JSONDecodeError, ValueError, OSError):
+        return {}
+
+
+def _clear_safety_confirm_state() -> None:
+    try:
+        SAFETY_CONFIRM_STATE_FILE.unlink()
+    except OSError:
+        pass
+
+
+def check_safety_guard(command: str, config: dict):
+    """Return a block message when COMMAND needs user confirmation, else None.
+
+    Config (D1/D7): default ENABLED at warn-destructive-only; `enabled: false`
+    and `sensitivity: "off"` are equivalent full-off switches; malformed
+    values degrade to the defaults (default-on survives config corruption).
+    Everything after the config read is fail-CLOSED (SC-3): an internal error
+    blocks with a no-nonce message and never leaks to the outer exit-0
+    backstop."""
+    sg = config.get("safety_guards") if isinstance(config, dict) else None
+    if not isinstance(sg, dict):
+        sg = {}
+    if sg.get("enabled") is False:
+        return None
+    sensitivity = sg.get("sensitivity")
+    if sensitivity == "off":
+        return None
+    if sensitivity not in ("warn-destructive-only", "warn-all"):
+        sensitivity = "warn-destructive-only"
+    try:
+        cmd = command.strip()
+        had_confirm_prefix = False
+        m = _SAFETY_CONFIRM_PREFIX_RE.match(cmd)
+        if m:
+            nonce, inner = m.group(1), m.group(2)
+            state = _load_safety_confirm_state()
+            expires_at = state.get("expires_at")
+            # Exact RAW match — whitespace normalization is NOT semantics-
+            # preserving (it would collapse spaces inside quoted paths and
+            # fold newline chains into a different program, codex R3). The
+            # block message displays the raw command verbatim, so a verbatim
+            # copy is exactly what binds.
+            if (state.get("nonce") == nonce
+                    and inner == state.get("command")
+                    and isinstance(expires_at, (int, float))
+                    and time.time() < expires_at):
+                # Single-use: consume the nonce; the rest of the hook flow
+                # (DAIC / documentation mode / branch) still applies.
+                _clear_safety_confirm_state()
+                return None
+            # Invalid / expired / mismatched confirmation — classify the
+            # inner command and issue a fresh nonce below.
+            had_confirm_prefix = True
+            cmd = inner
+        allowlist = sg.get("allowlist")
+        if not isinstance(allowlist, list):
+            allowlist = []
+        if _matches_safety_allowlist(cmd, allowlist):
+            return None
+        classification = _classify_command(cmd, sensitivity)
+        if not classification["reasons"]:
+            return None
+        if _own_branch_exception(classification, sensitivity):
+            return None
+        new_nonce = secrets.token_hex(8)
+        ensure_state_dir()  # house style: _write_json_durable has no mkdir
+        _write_json_durable(SAFETY_CONFIRM_STATE_FILE, {
+            "nonce": new_nonce,
+            "command": cmd,
+            "created_at": time.time(),
+            "expires_at": time.time() + _SAFETY_CONFIRM_TTL_SECONDS,
+        })
+        reasons_txt = "; ".join(dict.fromkeys(classification["reasons"]))
+        stale_note = (
+            "Previous confirmation was invalid, expired, or bound to a "
+            "different command — a NEW nonce was issued.\n"
+        ) if had_confirm_prefix else ""
+        return (
+            f"[Safety Guard] Destructive command blocked: {reasons_txt}.\n"
+            f"{stale_note}"
+            "This command requires explicit user confirmation. ASK THE USER "
+            "and wait for their approval.\n"
+            "If (and only if) the user approves, re-run the exact command "
+            "with the confirmation prefix (copy it VERBATIM — the binding is "
+            "an exact raw-string match):\n"
+            f"SAFETY_CONFIRM={new_nonce} {cmd}\n"
+            "The nonce is single-use, expires in 10 minutes, and is valid "
+            "only for this exact command.\n"
+            "(Friction guard, not a security control. Configure via "
+            "safety_guards.* in /team-management:config.)"
+        )
+    except Exception as exc:  # SC-3: fail CLOSED — never reach the exit-0 backstop
+        return (
+            "[Safety Guard] Internal classifier error — command blocked "
+            f"(fail-closed): {exc}. Simplify the command and retry; if "
+            "stuck, disable via safety_guards.enabled in "
+            "/team-management:config. (Friction guard, not a security "
+            "control.)"
+        )
+
+
 def main():
     # Load input — guard against empty / malformed / non-dict stdin. An unguarded
     # json.load on empty stdin raises, and for THIS PreToolUse enforcement hook a
@@ -619,6 +1117,15 @@ def main():
         if archival_blocked:
             print(archival_msg, file=sys.stderr)
             sys.exit(2)  # Exit code 2 blocks the operation
+        # SAFETY GUARDS: destructive-command classifier with two-step typed
+        # confirmation (h-gstack-safety-guards). Lives in the universal Bash
+        # block so it binds subagents too; the workflow-bypass exit above
+        # deliberately disables it (D6 — workflow friction, not secret
+        # protection).
+        safety_msg = check_safety_guard(command, config)
+        if safety_msg:
+            print(safety_msg, file=sys.stderr)
+            sys.exit(2)
 
     # ============================================================================
     # CONFIG FILE PROTECTION

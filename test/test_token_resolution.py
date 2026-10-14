@@ -288,20 +288,28 @@ def test_credential_filter_passes_ordinary_prose():
 
 def test_codex_wrapper_scrubs_env():
     md = (AGENTS_DIR / "codex-cli.md").read_text(encoding="utf-8")
-    scrubbed = 'env -i PATH="$PATH" HOME="$HOME" codex'
-    # §2 skeleton (both branches) + §3 schema block (both branches) → 4 scrubbed
-    # invocations. (The prose intentionally quotes the WRONG `300s codex` form as
-    # an anti-pattern, so a bare-grep negative would false-positive on it.)
+    scrubbed = 'env -i PATH="$PATH" HOME="$HOME" TMPDIR="${TMPDIR:-/tmp}" codex'
+    # A LOWER BOUND on purpose — this is the SEC-003b presence grep, not the
+    # site census. The exact count (4: §2 skeleton and §3 schema block, both
+    # timeout branches) is pinned with invocation-site filtering by
+    # test/test_provider_env_scrub.py, which rejects comments and non-invocations;
+    # asserting an exact count here too would duplicate that guard and make an
+    # ordinary edit fail in two places with only one of them explaining why.
+    # (The prose intentionally quotes the WRONG `300s codex` form as an
+    # anti-pattern, so a bare-grep negative would false-positive on it.)
     assert md.count(scrubbed) >= 2
     # Every fenced timeout-branch line that runs codex carries the scrub.
-    assert 'env -i PATH="$PATH" HOME="$HOME" codex' in md
+    # TMPDIR joined PATH/HOME because `env -i` otherwise leaves the CLI with no
+    # writable temp dir; a path is not a secret. Full contract + per-site
+    # coverage: test/test_provider_env_scrub.py.
+    assert scrubbed in md
 
 
 def test_agy_wrapper_scrubs_env():
     md = (AGENTS_DIR / "agy-cli.md").read_text(encoding="utf-8")
-    scrubbed = 'env -i PATH="$PATH" HOME="$HOME" agy'
+    scrubbed = 'env -i PATH="$PATH" HOME="$HOME" TMPDIR="${TMPDIR:-/tmp}" agy'
     # Exactly two agy invocations (timeout branch + shell-native fallback),
     # both scrubbed.
     assert md.count(scrubbed) == 2
-    # No bare "330s agy" (timeout branch without the scrub).
-    assert "330s agy " not in md
+    # No bare "510s agy" (timeout branch without the scrub).
+    assert "510s agy " not in md

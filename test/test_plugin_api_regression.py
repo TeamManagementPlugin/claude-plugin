@@ -280,7 +280,7 @@ def test_f6_shim_windows_fallback():
 # event carries command_name. OUR SIDE: bare filenames + the intent-gate matches the
 # namespaced name on the structural path (and ignores a prose mention).
 _EXPECTED_COMMANDS = {
-    "config.md", "init.md", "clean-check.md",
+    "config.md", "init.md", "changelog.md", "clean-check.md",
     "wiki-ingest.md", "wiki-lint.md", "wiki-tune.md",
     "custom-protocol-create.md", "custom-protocol-update-after-reinstall.md",
 }

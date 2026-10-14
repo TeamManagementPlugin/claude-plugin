@@ -2,7 +2,7 @@
 title: Optimize Protocols
 tags: [protocols, git, daic]
 created: 2026-05-31
-updated: 2026-06-10
+updated: 2026-10-13
 sources: [plugin/protocol-configs/optimize.json, plugin/protocol-configs/optimize-unattended.json, plugin/hooks/optimize_completion.py, plugin/protocol-configs/sub-protocols/optimize-setup.md, plugin/protocol-configs/sub-protocols/optimize-experimentation-batch.md, plugin/protocol-configs/sub-protocols/optimize-experimentation-auto.md, plugin/hooks/sessions-enforce.py]
 ---
 
@@ -22,7 +22,7 @@ Both protocols are 7 steps (`optimize.json`, `optimize-unattended.json`):
 2. **metric-script** (`mode: implementation`) — Author the measurement script; `validate_metric_script` runs it twice and gates on stability within `stability_threshold_pct` (default 5%).
 3. **baseline** (`mode: implementation`) — `capture_metric_baseline` runs the metric once on HEAD; `check_cost_estimate` projects total wall-clock from real timing.
 4. **experimentation** (`mode: implementation`, `looping_step: true`) — The hypothesis loop. See below.
-5. **synthesis** (`mode: documentation`, `post_funcs_stop_on_failure: false`) — Findings document; `policy_compliance_audit` is a non-blocking metric-gaming scan.
+5. **synthesis** (`mode: documentation`, `post_funcs_stop_on_failure: true`) — Findings document; `policy_compliance_audit` is a metric-gaming scan that always succeeds, followed by the blocking `check_claude_md_hygiene` gate.
 6. **code-review** (`mode: implementation`) — Spec-compliance + code-quality review on the cumulative `baseline..best_commit` diff. AI providers join via `resolve_ai_providers` pre_func.
 7. **completion** (`mode: discussion`) — `completion_dispatch` routes to `_completion_optimize`: squash + leaderboard MR/PR.
 

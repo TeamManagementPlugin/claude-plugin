@@ -15,14 +15,14 @@
     "include_in_refactoring_planning": true,
     "timeout": 300
   },
-  "_comment_ai_providers": "AI provider integration for multi-model analysis. Providers run as parallel Task agents (no MCP bridge). 6 per-phase flags gate participation: code_review, brainstorm, investigation, implementation, research_exploration, refactoring_planning. Available providers: codex (OpenAI Codex CLI), agy (Google Antigravity CLI). timeout is currently INERT — the wrappers enforce a fixed deadline (codex 300s, agy 330s watchdog) and do not read this key; it is kept for a future plumbing task. Legacy keys `include_in_architecture` and `include_in_exploration` are deprecated, and the retired `gemini` provider was replaced by `agy` — values are NOT auto-forwarded; session-start emits a one-time warning when they appear here.",
+  "_comment_ai_providers": "AI provider integration for multi-model analysis. Providers run as parallel Task agents (no MCP bridge). 6 per-phase flags gate participation: code_review, brainstorm, investigation, implementation, research_exploration, refactoring_planning. Available providers: codex (OpenAI Codex CLI), agy (Google Antigravity CLI). timeout is currently INERT — the wrappers enforce a fixed deadline (codex 300s, agy 510s watchdog) and do not read this key; it is kept for a future plumbing task. Legacy keys `include_in_architecture` and `include_in_exploration` are deprecated, and the retired `gemini` provider was replaced by `agy` — values are NOT auto-forwarded; session-start emits a one-time warning when they appear here.",
   "codex": {
     "enabled": false
   },
   "agy": {
     "enabled": false
   },
-  "_comment_agy": "Google Antigravity CLI (agy) provider. Runs `agy --add-dir <project> --dangerously-skip-permissions --print-timeout 300s -p ...` (NO --sandbox — on macOS the sandbox blocks git and produces no review). skip-permissions gets past the headless soft-deny and is CONTAINED by a project-local `.agents/hooks.json` read-only deny-gate that team-management deploys automatically when agy is enabled (merge-aware); the wrapper also detects and reports any file mutations via a git-status check. Note: agy reads `.agents/hooks.json` for ANY agy invocation in this project, so your own manual `agy` runs here are also read-only-restricted (fails safe — more restrictive, never less). The framework does not override model selection — agy uses its CLI-default model (change via `agy --model <name>` or the agy /settings UI). Requires: Antigravity CLI installed and authenticated (run `agy` once to sign in).",
+  "_comment_agy": "Google Antigravity CLI (agy) provider. Runs `agy --add-dir <project> --print-timeout 480s -p ...` — NO --sandbox (on macOS the sandbox blocks git and produces no review) and NO --dangerously-skip-permissions (harness security monitors block it). SETUP, one-time per machine: headless agy auto-denies every command unless `permissions.allow` in your GLOBAL `~/.gemini/antigravity-cli/settings.json` grants it, so /team-management:config offers to add read-only rules there; without them agy returns an empty review that reads like a clean one. The run is CONTAINED by a project-local `.agents/hooks.json` read-only deny-gate that team-management deploys automatically when agy is enabled (merge-aware); the wrapper also detects and reports any file mutations via a git-status check. Note: agy reads `.agents/hooks.json` for ANY agy invocation in this project, so your own manual `agy` runs here are also read-only-restricted (fails safe — more restrictive, never less). The framework does not override model selection — agy uses its CLI-default model (change via `agy --model <name>` or the agy /settings UI). Requires: Antigravity CLI installed and authenticated (run `agy` once to sign in).",
   "blocked_tools": [
     "Edit",
     "Write",
@@ -53,9 +53,17 @@
   },
   "_comment_features": "Icon styles: 'nerd_fonts' (default on macOS/Linux), 'emoji', 'ascii' (default on Windows)",
   "code_review": {
-    "enforce_warnings": false
+    "enforce_warnings": false,
+    "testing_specialist_enabled": true,
+    "red_team_enabled": true,
+    "cleanliness_enabled": true
   },
-  "_comment_code_review": "enforce_warnings: When true, code review warnings must be acknowledged before task completion (default: false)",
+  "_comment_code_review": "enforce_warnings: When true, every confirmed code-review Warning (a defect, or changed behaviour no test exercises) blocks completion until fixed; Notes never block (default: false). testing_specialist_enabled / red_team_enabled / cleanliness_enabled gate the classifier-dispatched review chain specialists (all default true; absent key = enabled): testing-specialist and code-cleanliness fire at >=50 changed lines and never on docs/config-only diffs; red-team fires at >200 lines or on a Critical first-round finding.",
+  "documentation": {
+    "claude_md_hygiene": true,
+    "claude_md_max_lines": 300
+  },
+  "_comment_documentation": "claude_md_hygiene: block the documentation step when a line the task ADDED to a CLAUDE.md names a task, uses history wording (previously / was removed / renamed from ...) or carries code-review chatter, or when a CLAUDE.md grew past claude_md_max_lines (default 300; counts non-blank lines outside the managed @-import block). Pre-existing lines never block.",
   "test_command": null,
   "_comment_test_command": "Optional. Command the code-review step runs to verify tests before advancing. Safe-by-design: must start with one of the allowlisted prefixes (pytest / npm test / cargo test / go test / rspec / rake test / python -m pytest / python -m unittest / python3 -m pytest / python3 -m unittest / jest) AND contain none of the forbidden shell metacharacters (; && || | ` $( > <). Runs with shell=False from the project root. Set to null to skip the gate.",
   "notifications": {
@@ -82,6 +90,12 @@
     "enabled": false
   },
   "_comment_wiki": "LLM Wiki: a persistent, compounding knowledge base Claude maintains under wiki/. Enable via /team-management:config (which also offers to seed wiki/). Default false.",
+  "safety_guards": {
+    "enabled": true,
+    "sensitivity": "warn-destructive-only",
+    "allowlist": []
+  },
+  "_comment_safety_guards": "Destructive-Bash-command guard: blocks rm -rf, DROP TABLE/DATABASE, TRUNCATE, git push --force, git reset --hard, git checkout/restore ., git clean -f, kubectl delete, docker rm -f and docker system prune behind an exit-2 block plus a two-step typed confirmation — the agent must ask you, then re-run the exact command with the SAFETY_CONFIRM=<nonce> prefix from the block message (nonce is single-use, 10-minute TTL). FRICTION ONLY, NOT SECURITY: the confirmation is replayable within the same turn (like the discard gate) and `enabled` is a UX toggle, not protection against a malicious agent. Known bypasses (accepted v1): shell variables, command substitution, bash -c / python -c strings, find -exec, base64 piping, unexpanded globs, wrapper commands outside the known wrapper set, quoted chain separators severing segment parsing. sensitivity: off | warn-destructive-only (default) | warn-all (additionally confirms every write-pattern Bash command and disables the own-branch exception). Built-in exception (warn-destructive-only only): reflog-recoverable git ops (reset --hard, push --force) on the task's own feature branch with no remote-tracking ref. allowlist: extra exact whole-command strings that always pass; built-in allowlist covers rm -rf of node_modules/dist/build/__pycache__/.cache/coverage.",
   "_comment_provider_tokens": "Provider API tokens are NOT stored in this file. They live in a per-project, user-authored .claude/state/provider-tokens.json (git-ignored, chmod 0600, keyed by provider name: gitlab/jira/github/telegram). Leave the api_token fields below empty; a token already present here from a legacy install still works as a fallback.",
   "issue_tracking": {
     "provider": "disabled",

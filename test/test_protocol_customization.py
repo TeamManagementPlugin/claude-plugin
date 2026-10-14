@@ -284,8 +284,15 @@ class TestCustomizeProtocol(CustomizationTestBase):
         self.assertEqual(cj.read_bytes(), (self.system_dir / "task.json").read_bytes())
 
     def test_customize_skips_missing_provider_template(self):
-        """A phase whose template is inline (code_review -> no codex-code-review.md
-        on disk) must not error and must not appear as copied."""
+        """A phase whose template is absent from the source tree must not error
+        and must not appear as copied.
+
+        The synthetic system dir below ships no `providers/` files at all, so
+        this exercises the `src.exists()` guard directly. (It was originally
+        written around code_review being inline-prompted; that phase is now
+        template-driven like the other five, but the guard it tests is
+        unchanged and still load-bearing for a partial install.)
+        """
         steps = [{
             "name": "code-review",
             "mode": "discussion",
@@ -305,6 +312,37 @@ class TestCustomizeProtocol(CustomizationTestBase):
         self.assertTrue((self.custom_dir / "rev.json").exists())
         self.assertTrue((self.custom_dir / "sub-protocols" / "code-review.md").exists())
         self.assertFalse((self.custom_dir / "providers" / "codex-code-review.md").exists())
+
+    def test_customize_copies_present_provider_template(self):
+        """The counterpart of the guard above: a template that IS on disk gets
+        forked and recorded, so the code-review prompt is user-overridable like
+        every other phase's."""
+        steps = [{
+            "name": "code-review",
+            "mode": "discussion",
+            "description": "Review",
+            "start": "@sub-protocols/code-review.md",
+            "pre_funcs": ["resolve_ai_providers"],
+        }]
+        (self.system_dir / "rev.json").write_text(
+            json.dumps({"name": "rev", "description": "rev", "steps": steps}), encoding="utf-8"
+        )
+        (self.system_dir / "sub-protocols" / "code-review.md").write_text(
+            "SYSTEM review text", encoding="utf-8"
+        )
+        providers = self.system_dir / "providers"
+        providers.mkdir(parents=True, exist_ok=True)
+        (providers / "codex-code-review.md").write_text("SYSTEM codex review", encoding="utf-8")
+        (providers / "agy-code-review.md").write_text("SYSTEM agy review", encoding="utf-8")
+
+        result = self.engine.customize_protocol("rev")
+        self.assertTrue(result["success"], result)
+        for fname in ("codex-code-review.md", "agy-code-review.md"):
+            self.assertTrue((self.custom_dir / "providers" / fname).exists(), fname)
+        sidecar = json.loads((self.custom_dir / ".forked-from.json").read_text(encoding="utf-8"))
+        recorded = json.dumps(sidecar)
+        self.assertIn("codex-code-review.md", recorded)
+        self.assertIn("agy-code-review.md", recorded)
 
     def test_customize_rejects_path_traversal(self):
         self._write_system_protocol("task")

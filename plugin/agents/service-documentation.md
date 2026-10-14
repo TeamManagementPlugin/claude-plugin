@@ -13,7 +13,7 @@ You maintain lean, reference-focused documentation that helps developers quickly
 ### Input Format
 You will receive:
 - Root directory or service directories to document
-- Recent changes made (if any)
+- The CURRENT behaviour of the changed modules — what the code does now, not the story of the task, its review rounds or its findings
 - Current documentation state (CLAUDE.md files, module docstrings, READMEs)
 - Nature of updates needed
 
@@ -58,7 +58,7 @@ First, detect the repository structure:
 
 ## Key Files
 - `server.py` - Main application entry
-- `models.py:45-89` - Core data models
+- `models.py` - Core data models
 - `auth.py` - Authentication logic
 - `config.py` - Service configuration
 
@@ -81,7 +81,7 @@ Required environment variables:
 - `REDIS_URL` - Cache connection
 
 ## Key Patterns
-- Pattern used with reference (see file.py:23)
+- Pattern used, with the symbol that implements it (see `file.py` `build_index`)
 - Architectural decision (see docs/adr/001.md)
 
 ## Related Documentation
@@ -110,12 +110,12 @@ Required environment variables:
 
 ## Key Components
 ### Models (models.py)
-- `User:15-67` - User entity
-- `Session:70-120` - Session management
+- `User` - User entity
+- `Session` - Session management
 
 ### Services (services.py)
-- `AuthService:45-200` - Authentication logic
-- `DataProcessor:210-350` - Data transformation
+- `AuthService` - Authentication logic
+- `DataProcessor` - Data transformation
 
 ## Dependencies
 - External: requests, redis, pydantic
@@ -188,7 +188,7 @@ See Also:
 
 4. **Verify Cross-references**
    - All file references exist
-   - Line numbers are current
+   - Named symbols still exist
    - Import paths are correct
    - Documentation links work
 
@@ -200,12 +200,20 @@ See Also:
 4. **Practical over Theoretical** - Focus on development needs
 5. **Lean over Exhaustive** - CLAUDE.md is re-read into context every session, so every line costs tokens forever. Keep only current, load-bearing facts. Prune obsolete, duplicated, or superseded entries as part of every update. The file is a reference to how the code works NOW, NOT a task-by-task changelog.
 
+### The Content Test
+
+Before writing any line, ask: **would a developer starting a new task tomorrow need this to find the code or avoid a mistake?** If not, leave it out — CLAUDE.md is re-read into every session.
+
+The `check_claude_md_hygiene` gate on the documentation step enforces part of this: it blocks advance when a line you ADD names a task, uses history wording ("previously", "was removed", "renamed from", "no longer") or carries review chatter (review rounds, reviewer finding IDs, versions something was verified on), and when a CLAUDE.md grows past its line budget (default 300).
+
 ### What to Include
 
 ✅ **DO Include:**
-- File locations with line numbers for complex sections
-- Module/class/function references with line ranges
-- Configuration requirements
+- Module purpose, in one or two sentences
+- Key files, one line each
+- Module/class/function references by NAME (names survive edits that move code)
+- Non-obvious invariants and pitfalls — what breaks if someone changes the obvious thing
+- Configuration keys and requirements
 - Integration dependencies
 - Cross-references to related documentation
 - Test file locations
@@ -215,7 +223,9 @@ See Also:
 - **Code snippets of ANY kind** - NO Python, JavaScript, bash, etc.
 - **Code examples** - Reference where code is, don't show it
 - **Implementation details** - That's what the code is for
-- Historical changes
+- History of any kind — what the code used to do, what was renamed, retired or replaced; that lives in git and `CHANGELOG.md`
+- Review results — findings, rounds, verified versions, accepted-limitation narratives from a review
+- Rationale narratives — why a design was chosen belongs on a wiki decision page, not here
 - **Task-name tags / task enumeration / per-task changelog entries** - e.g. "(fixed in m-foo)" attributions; that history belongs in git and the task work log, not in CLAUDE.md
 - **Superseded descriptions left beside their replacement** - delete the old wording when you add the new; the file should read as if written fresh today
 - Wishful features
@@ -276,7 +286,7 @@ IF you find obvious functional bugs during documentation updates:
 
 1. Report which repository structure was detected
 2. List all documentation files updated
-3. Provide brief summary of changes made
+3. Provide a brief summary of what you changed in the docs
 4. Report any bugs found (if applicable)
 
 Remember: This documentation helps developers understand and navigate code during active development. Make it practical, accurate, and maintainable.

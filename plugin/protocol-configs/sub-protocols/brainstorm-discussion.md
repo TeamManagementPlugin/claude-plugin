@@ -37,6 +37,12 @@ Three-step procedure — apply it every time, not just for «big» topics:
 
 **One question per `AskUserQuestion` call. Large questions need context — bundling multiple into one widget forces the user to hold parallel state.**
 
+**Evidence grounding** — never ask a question in the abstract: anchor it to a verbatim quote, a `file:line`, or a concrete data point you found. If you cannot cite what raised the question, you have not investigated enough to ask it.
+
+**Re-grounding after pauses** — assume the user hasn't looked at this window in 20 minutes: before a question that follows a long silent stretch of work, restate the minimal context (what was decided, what is being asked now).
+
+**Dual-scale effort estimates** — when a scope question involves effort, give both scales: human effort (hours/days) and AI-session effort (minutes/sessions). The scales diverge wildly; a single number misleads whichever way the user reads it.
+
 If you anticipate the user being unsure, reserve ONE of the 2-4 option slots for a «Not sure — let's discuss» choice (replacing the lowest-priority concrete option, not adding a 5th — that would violate the schema). If picked, drop the widget and continue in plain prose chat until the topic is clear, then re-ask via `AskUserQuestion` with options informed by the discussion. Keep the conversation flowing naturally; don't force rigid structure for its own sake.
 
 #### Worked Example
@@ -80,6 +86,15 @@ Whenever the user faces a non-trivial design decision, do NOT present a single o
 - **Approach C** — [alternative axis — simpler / faster / more future-proof]. Trade-offs: […].
 
 Record the chosen approach — and the rejected alternatives — under `## Decisions`. Preserving the rejected options documents *why* the accepted one won, which is load-bearing context for later analysis and implementation.
+
+### Forcing Questions (product-type brainstorms — selective)
+
+When the topic is a product or feature idea (not internal refactoring/tooling), weave in the forcing questions that expose weak foundations early. Ask the ones whose answer is genuinely unknown — not all four ritually:
+
+- **Demand Reality**: who demonstrably has this problem today? What evidence of demand exists beyond our own enthusiasm?
+- **Status Quo**: what do people do about this problem right now, without us? Why is that not good enough?
+- **Narrowest Wedge**: what is the narrowest version that still delivers the core value? What are we deliberately NOT building first?
+- **User observation**: have we watched a real user hit this problem? What did they actually do?
 
 ## 2. Recording Decisions
 

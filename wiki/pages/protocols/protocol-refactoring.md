@@ -2,7 +2,7 @@
 title: refactoring Protocol
 tags: [protocols, testing, daic, git, ai-providers]
 created: 2026-05-31
-updated: 2026-06-10
+updated: 2026-10-13
 sources: [plugin/protocol-configs/refactoring.json, plugin/protocol-configs/sub-protocols/refactoring-planning.md, plugin/protocol-configs/sub-protocols/refactoring-incremental.md, plugin/protocol-configs/sub-protocols/refactoring-verify.md, plugin/protocol-configs/sub-protocols/code-review.md, plugin/protocol-configs/sub-protocols/task-completion.md]
 ---
 
@@ -66,8 +66,8 @@ What the LLM does (`refactoring-verify.md`): run the **exact same** test command
 
 Run the code-review agent + AI providers, fix all issues.
 
-- **`pre_funcs`**: `resolve_ai_providers`, `require_spec_review_passed`.
-- **`post_funcs`** (`post_funcs_stop_on_failure: true`): `require_spec_review_passed`, `check_completion_evidence`, `validate_code_review_in_worklog`, `validate_no_critical_issues_in_worklog` (`refactoring.json`).
+- **`pre_funcs`**: `resolve_ai_providers`, `classify_review_dispatch`.
+- **`post_funcs`** (`post_funcs_stop_on_failure: true`): `verify_review_round`, `require_spec_review_passed`, `check_completion_evidence`, `validate_code_review_in_worklog`, `validate_no_critical_issues_in_worklog` (`refactoring.json`).
 
 This uses the **same `code-review.md` sub-protocol** as `task` — the N+1 parallel dispatch of the Claude `code-review` agent plus one `Task` per configured provider, equal-weight aggregation, the `# Code Review: [Title]` work-log block. Since m-hooks-hygiene-sweep (audit M2) the func wiring matches `task`'s two-stage gate — `SPEC_REVIEW: PASSED` sentinel + structural evidence check — with **one deliberate omission: `verify_tests_pass`**. That gate requires a clean exit 0 from `test_command`, but the refactoring protocol tolerates pre-existing baseline failures by design (test-verify diffs against the captured baseline); on a dirty-baseline codebase the exit-0 gate would block advance permanently. The omission is pinned by `test/test_refactoring_gates_drift.py`, which fails if `verify_tests_pass` is ever reintroduced so the trade-off gets re-litigated rather than silently reverted. Warning enforcement (strict/relaxed) still applies.
 
@@ -98,7 +98,7 @@ Uses the shared `task-completion.md` sub-protocol and the standard `completion_d
 ## Gotchas
 
 - **No test suite → abort and write tests first.** The protocol cannot manufacture a safety net for you. Its two pre-refactoring steps are discussion-mode and can't author tests; `refactoring-incremental.md` tells you to `protocol_abort` and open a test-authoring task when coverage is absent.
-- **refactoring's code-review is lighter than task's — no `SPEC_REVIEW: PASSED`.** If you expect the spec-compliance sentinel here, you won't find it. The two-stage gate is task/optimize-only.
+- **refactoring's code-review runs the spec audit but defers nothing.** It records `SPEC_REVIEW: PASSED` like `task`, but there is no documentation step after it, so a documentation criterion must be written before the audit — the reviewer is told no later step exists and reports a missing one as `NOT DONE`.
 - **Regressions loop you back to step 3, not forward.** test-verify is a hard gate: any newly-failing test sends you to `protocol_goto(step_name="refactoring")` to fix before you can reach code-review.
 - **`test_command: "none"` weakens both gates.** With no suite, the baseline and verify steps degrade to "verify by other means and document it" — the protocol still runs, but the safety net is gone. Prefer writing tests first.
 - **Don't fold unrelated fixes into a refactor increment.** The Scope Guard is explicit: unrelated bugs and new functionality become follow-up tasks, not bundled commits.

@@ -58,6 +58,14 @@ jobs:
         run: |
           version="$(python -c "import json; print(json.load(open('plugin/.claude-plugin/plugin.json'))['version'])")"
           tag="v${version}"
+          # Source Release notes from the version's CHANGELOG section; fall back
+          # to --generate-notes when extraction yields nothing (defense in depth —
+          # the validate job already requires the section to exist).
+          notes_args=(--generate-notes)
+          if python .github/scripts/extract_changelog_notes.py "${version}" > release-notes.md \
+              && [ -s release-notes.md ]; then
+            notes_args=(--notes-file release-notes.md)
+          fi
           if git ls-remote --exit-code --tags origin "refs/tags/${tag}" >/dev/null 2>&1; then
             # Tag already exists. A prior run may have pushed the tag but failed before
             # creating the Release, so backfill the Release if it is missing.
@@ -65,7 +73,7 @@ jobs:
               echo "Tag ${tag} and its Release already exist — nothing to do."
             else
               echo "Tag ${tag} exists but has no Release — backfilling the Release."
-              gh release create "${tag}" --title "${tag}" --generate-notes
+              gh release create "${tag}" --title "${tag}" "${notes_args[@]}"
             fi
             exit 0
           fi
@@ -74,4 +82,4 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git tag -a "${tag}" -m "Release ${tag}"
           git push origin "${tag}"
-          gh release create "${tag}" --title "${tag}" --generate-notes
+          gh release create "${tag}" --title "${tag}" "${notes_args[@]}"
