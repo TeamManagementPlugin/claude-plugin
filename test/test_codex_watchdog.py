@@ -96,16 +96,19 @@ class CodexWatchdogDriftGuardTest(TestCase):
         self.assertIn("(non-zero", self.text)
 
     def test_env_scrub_preserved_on_all_codepaths(self):
-        """SEC-003: codex must run under the `env -i PATH HOME` scrub on EVERY
+        """SEC-003: codex must run under the `env -i PATH HOME TMPDIR` scrub on EVERY
         codepath — the gtimeout primary AND the shell-native fallback, in BOTH
         the §2 skeleton and the §3 --output-schema variant (4 total). A regex
         anchored to the single-line §2 fallback would pass on §2 alone and miss
         a dropped scrub on §3's multi-line fallback, so assert the count."""
         self.assertGreaterEqual(
-            self.text.count('env -i PATH="$PATH" HOME="$HOME" codex'), 4,
-            "the env -i PATH/HOME scrub must wrap codex on all four codepaths "
+            self.text.count(
+                'env -i PATH="$PATH" HOME="$HOME" TMPDIR="${TMPDIR:-/tmp}" codex'), 4,
+            "the env -i PATH/HOME/TMPDIR scrub must wrap codex on all four codepaths "
             "(§2 primary + fallback, §3 primary + fallback); a count below 4 "
-            "means a SEC-003 scrub was dropped from one path.",
+            "means a SEC-003 scrub was dropped from one path. TMPDIR joined the "
+            "scrub because env -i otherwise leaves codex with no writable temp dir "
+            "(see test/test_provider_env_scrub.py for the full contract).",
         )
 
     def test_watchdog_present_in_both_invocation_sites(self):

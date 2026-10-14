@@ -1,6 +1,6 @@
 ---
 name: code-cleanliness
-description: Analyzes code for cleanliness issues including unused code, comment quality, formatting, naming conventions, import organization, duplication, and code complexity. Provides actionable recommendations without auto-fixing. Use when requested by user to assess code quality before refactoring or review.
+description: Analyzes code for cleanliness issues including unused code, comment quality, formatting, naming conventions, import organization, duplication, and code complexity. Provides actionable recommendations without auto-fixing. Dispatched by the code-review sub-protocol when the diff classifier fires (>=50 changed lines, not docs/config-only); also usable on demand to assess code quality before refactoring or review.
 tools: Read, Grep, Glob, Bash
 model: sonnet
 ---
@@ -172,11 +172,11 @@ For directories/patterns:
 
 ## 🔴 Critical Issues ([count])
 
-Issues that significantly harm maintainability or hide bugs.
+Cleanliness problems that hide a Critical-level fault.
 
 ### 1. [Issue Title]
 **Category**: [emoji] [Category Name]
-**Severity**: [Critical | High | Medium | Low]
+**Severity**: [Critical | Warning | Note]
 **File**: `path/to/file:45-52`
 **Issue**: [Clear description of the problem]
 **Impact**: [Why this matters]
@@ -191,22 +191,22 @@ Issues that significantly harm maintainability or hide bugs.
 
 ## 🟡 Warnings ([count])
 
-Issues that reduce code quality and should be addressed.
+Cleanliness problems that hide a defect you can name.
 
 ### 1. [Issue Title]
 **Category**: [emoji] [Category Name]
-**Severity**: [Critical | High | Medium | Low]
+**Severity**: [Critical | Warning | Note]
 **File**: `path/to/file:89`
 **Issue**: [Clear description]
 **Recommendation**: [How to fix]
 
 ## 🟢 Notes ([count])
 
-Minor improvements for consideration.
+Everything else — improvements that never block.
 
 ### 1. [Issue Title]
 **Category**: [emoji] [Category Name]
-**Severity**: [Critical | High | Medium | Low]
+**Severity**: [Critical | Warning | Note]
 **File**: `path/to/file:15`
 **Note**: [Observation]
 **Suggestion**: [Optional improvement]
@@ -229,11 +229,11 @@ Minor improvements for consideration.
 
 ## Recommendations
 
-### High Priority
+### Most Valuable
 1. [Specific actionable recommendation]
 2. [Specific actionable recommendation]
 
-### Medium Priority
+### Worth Doing
 1. [Specific actionable recommendation]
 
 ### Optional Improvements
@@ -242,14 +242,17 @@ Minor improvements for consideration.
 
 ## Severity Levels
 
-Rate every finding on one scale — the same scale the review and analyst agents (code-review, critic, risk-security-analyst) use:
+Rate every finding on the three-level scale every reviewer in the code-review step uses:
 
-- **🔴 Critical** — unused code that indicates a bug (a parameter that should be used), a misleading comment that will cause errors, duplication that causes maintenance bugs, a dead code path hiding an issue, or complexity that makes testing impossible.
-- **🟠 High** — a cleanliness problem with real maintenance cost: excessive function length/complexity, deep nesting, or duplication that will drift.
-- **🟡 Medium** — clutter that reduces readability: unused imports/variables, poor naming, missing comments on complex logic, magic numbers/strings.
-- **🟢 Low** — minor: formatting inconsistencies, import-order suggestions, optional type hints, style preferences, potential abstractions.
+- **🔴 Critical** — security fault, data loss or corruption, crash, broken contract, unmet success criterion. Blocks completion.
+- **🟡 Warning** — a defect: the code does the wrong thing in a case that can happen; or a success criterion no test exercises at all; or behaviour the change adds or alters that no test exercises at all.
+- **🟢 Note** — everything else: a test that could assert more of a behaviour a test already covers, a mutation a test would let through, naming, style, refactor, consistency with an existing pattern, a finding in code the change did not touch. Notes never block and never send work back.
 
-**Section grouping:** the output groups findings into `## 🔴 Critical Issues` (Critical), `## 🟡 Warnings` (High + Medium), and `## 🟢 Notes` (Low); tag each finding with its precise `**Severity**:`.
+A finding between two levels takes the lower one unless you can name the input that makes the code do the wrong thing.
+
+Cleanliness findings are Notes by default — unused imports, naming, magic values, length, nesting, duplication, formatting. One becomes a Warning only when it hides a defect you can name: a parameter that should be used and is ignored, a comment that misstates what callers rely on, duplicated logic whose copies already disagree.
+
+**Section grouping:** the output groups findings into `## 🔴 Critical Issues` (Critical), `## 🟡 Warnings` (Warning), and `## 🟢 Notes` (Note); tag each finding with `**Severity**: Critical`, `Warning` or `Note`.
 
 ## Key Principles
 

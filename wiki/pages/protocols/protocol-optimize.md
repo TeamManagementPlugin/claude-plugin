@@ -2,7 +2,7 @@
 title: optimize Protocol
 tags: [protocols, daic, git, ai-providers]
 created: 2026-05-31
-updated: 2026-05-31
+updated: 2026-10-13
 sources: [plugin/protocol-configs/optimize.json, plugin/protocol-configs/sub-protocols/optimize-setup.md, plugin/protocol-configs/sub-protocols/optimize-metric-script.md, plugin/protocol-configs/sub-protocols/optimize-baseline.md, plugin/protocol-configs/sub-protocols/optimize-experimentation-batch.md, plugin/protocol-configs/sub-protocols/optimize-synthesis.md]
 ---
 
@@ -67,9 +67,9 @@ A **terminate-aware short-circuit** makes `batch_checkpoint` a no-op when `check
 
 ## Step 5 — synthesis (`mode: documentation`)
 
-Findings document + non-blocking metric-gaming audit.
+Findings document + non-blocking metric-gaming audit + the CLAUDE.md hygiene gate.
 
-- **`post_funcs`** (`post_funcs_stop_on_failure: false`): `policy_compliance_audit`.
+- **`post_funcs`** (`post_funcs_stop_on_failure: true`): `policy_compliance_audit` (always succeeds — git failures degrade to a `skipped` result), `check_claude_md_hygiene` (blocks added CLAUDE.md lines that name tasks, use history wording or carry review chatter).
 
 Documentation mode — write `## Findings` (best metric + producing iteration, total iterations + termination reason, time spent, top-3 hypotheses by improvement, dead ends, surprises). `policy_compliance_audit` scans `git log baseline..HEAD` for three gaming patterns — frozen-path edits, hardcoded `best_metric` constants in added diff lines, `results.tsv` edits inside hypothesis commits — and emits advisory `metric_gaming_flags`. It is **best-effort heuristic, never blocks advance** (`optimize-synthesis.md`). For each flag the LLM gives a verdict (legitimate/suspicious/ambiguous); suspicious flags → revert + `protocol_goto(experimentation)` + `restart`.
 
@@ -77,8 +77,8 @@ Documentation mode — write `## Findings` (best metric + producing iteration, t
 
 Spec-compliance + code-quality review on the **cumulative `baseline..best_commit` diff**.
 
-- **`pre_funcs`**: `resolve_ai_providers`, `require_spec_review_passed`.
-- **`post_funcs`** (`post_funcs_stop_on_failure: true`): `require_spec_review_passed`, `verify_tests_pass`, `check_completion_evidence`, `validate_code_review_in_worklog`, `validate_no_critical_issues_in_worklog`.
+- **`pre_funcs`**: `resolve_ai_providers`.
+- **`post_funcs`** (`post_funcs_stop_on_failure: true`): `verify_review_round`, `require_spec_review_passed`, `verify_tests_pass`, `check_completion_evidence`, `validate_code_review_in_worklog`, `validate_no_critical_issues_in_worklog`.
 
 Identical wiring to [task](pages/protocols/protocol-task.md)'s code-review step: the `SPEC_REVIEW: PASSED` sentinel gate, the optional `verify_tests_pass`, and the `check_completion_evidence` evidence gate all apply. Uses the shared `code-review.md` sub-protocol.
 

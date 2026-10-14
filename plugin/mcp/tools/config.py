@@ -49,6 +49,9 @@ _CONFIG_SCHEMA: Dict[str, Any] = {
     "task_detection.enabled": bool,
     "features.icon_style": ("enum", ["nerd_fonts", "emoji", "ascii"]),
     "code_review.enforce_warnings": bool,
+    "code_review.testing_specialist_enabled": bool,
+    "code_review.red_team_enabled": bool,
+    "code_review.cleanliness_enabled": bool,
     # auto-compact
     "auto_compact.enabled": bool,
     "auto_compact.threshold": int,
@@ -100,6 +103,12 @@ _CONFIG_SCHEMA: Dict[str, Any] = {
     "notifications.channels.telegram.ca_bundle": str,
     # wiki
     "wiki.enabled": bool,
+    # safety guards (destructive-Bash-command classifier)
+    "safety_guards.enabled": bool,
+    "safety_guards.sensitivity": ("enum", ["off", "warn-destructive-only", "warn-all"]),
+    "safety_guards.allowlist": list,
+    "documentation.claude_md_hygiene": bool,
+    "documentation.claude_md_max_lines": _POS_INT,
 }
 
 # Human-readable one-line descriptions for every _CONFIG_SCHEMA key, surfaced to the
@@ -117,7 +126,10 @@ _SCHEMA_DESCRIPTIONS: Dict[str, str] = {
     "branch_enforcement.branch_prefixes": "Task-prefix -> branch-prefix map (e.g. {\"fix-\": \"fix/\", \"o-\": \"optimize/\"}); overrides the built-in defaults.",
     "task_detection.enabled": "Enable task-based workflows and task-state detection.",
     "features.icon_style": "Statusline icon set: nerd_fonts (patched-font glyphs), emoji, or ascii (safest for any terminal).",
-    "code_review.enforce_warnings": "When true, code-review warnings must be acknowledged before task completion.",
+    "code_review.enforce_warnings": "When true, every confirmed code-review Warning (a defect, or changed behaviour no test exercises) blocks completion until fixed; Notes never block. Default: false.",
+    "code_review.testing_specialist_enabled": "Dispatch the testing-specialist review agent when the diff classifier fires (>=50 changed lines, not docs/config-only). Default: true.",
+    "code_review.red_team_enabled": "Dispatch the red-team second-echelon reviewer when the diff classifier fires (>200 changed lines) or a Critical first-round finding appears. Default: true.",
+    "code_review.cleanliness_enabled": "Dispatch the code-cleanliness agent when the diff classifier fires (>=50 changed lines, not docs/config-only). Default: true.",
     "auto_compact.enabled": "Enable automatic context compaction near the token threshold.",
     "auto_compact.threshold": "Token-usage percentage that triggers auto-compaction (e.g. 85).",
     "auto_compact.context_limit": "Explicit model context-window budget in tokens (e.g. 1000000 for 1M); overrides auto-detection.",
@@ -151,7 +163,7 @@ _SCHEMA_DESCRIPTIONS: Dict[str, str] = {
     "ai_providers.include_in_implementation": "Run AI providers during the implementation planning phase.",
     "ai_providers.include_in_research_exploration": "Run AI providers during the research exploration phase.",
     "ai_providers.include_in_refactoring_planning": "Run AI providers during the refactoring planning phase.",
-    "ai_providers.timeout": "Currently inert (default 300): NOT read by the codex/agy wrappers, which enforce a fixed deadline (codex 300s, agy 330s watchdog). Kept for a future plumbing task.",
+    "ai_providers.timeout": "Currently inert (default 300): NOT read by the codex/agy wrappers, which enforce a fixed deadline (codex 300s, agy 510s watchdog). Kept for a future plumbing task.",
     "codex.enabled": "Enable the Codex (OpenAI) provider.",
     "agy.enabled": "Enable the Antigravity (agy) provider; uses the CLI-default model.",
     "notifications.enabled": "Enable external notifications (e.g. Telegram) on protocol events.",
@@ -161,6 +173,11 @@ _SCHEMA_DESCRIPTIONS: Dict[str, str] = {
     "notifications.channels.telegram.chat_id": "Telegram chat id to deliver notifications to (the bot token is a secret set in .claude/state/provider-tokens.json under key telegram, not here).",
     "notifications.channels.telegram.ca_bundle": "Optional path to a CA bundle (PEM) for verifying api.telegram.org — only needed if the Python running the MCP server can't verify Telegram's cert (empty CA store, or a TLS-inspecting proxy whose root you point at here). Env SSL_CERT_FILE / REQUESTS_CA_BUNDLE also honored.",
     "wiki.enabled": "Enable the LLM Wiki feature.",
+    "safety_guards.enabled": "Block destructive Bash commands (rm -rf, git reset --hard, DROP TABLE, ...) behind a typed confirmation. Friction guard, not a security control. Default: true.",
+    "safety_guards.sensitivity": "off = guard disabled; warn-destructive-only (default) = block the destructive pattern set; warn-all = additionally confirm every write-pattern Bash command (own-branch exception disabled).",
+    "safety_guards.allowlist": "Extra whole-command allowlist entries (exact command strings, whitespace-normalized) that always pass the safety guard, e.g. [\"rm -rf .tox\"].",
+    "documentation.claude_md_hygiene": "Block the documentation step when a line the task added to a CLAUDE.md names a task, uses history wording or carries review chatter, or a CLAUDE.md grew past its budget. Default: true.",
+    "documentation.claude_md_max_lines": "Line budget for one CLAUDE.md file (non-blank lines outside the managed @-import block), enforced only when the task grew that file. Default: 300.",
 }
 
 
@@ -421,6 +438,36 @@ def _ensure_gitignored(toplevel: Optional[str], config_path) -> Dict[str, Any]:
         return {"status": "unavailable", "path": rel, "covered_by": None}
 
 
+def _should_write_agy_rules(updates: Iterable[str], rules_present: bool) -> bool:
+    """Whether this `/team-management:config` call should write agy's GLOBAL rules.
+
+    Extracted from the call site so the decision is testable. Inline, its only
+    coverage was an `assertIn("ensure_agy_permission_rules", source)` grep — deleting
+    either disjunct kept the suite green, and a real end-to-end test was impossible
+    because the writer's `home` defaults to the developer's actual home directory
+    (test-quality review, round 5).
+
+    Two independent triggers, each covering a failure the other misses:
+
+    * **this call touches agy** — the write must track the moment consent was asked.
+      `_agy_enabled(config)` is true on every later config write too, so gating on it
+      alone would silently write outside the project months afterwards, with the
+      consent disclosure (bound to "before enabling agy") never shown.
+    * **the rules are missing** — SessionStart tells the user to run
+      `/team-management:config` to add them, but the flow only visits sections the
+      user opts into. A user whose agy config is otherwise correct, which is exactly
+      who that notice targets, has no reason to enter the AI-providers section; with
+      only the first trigger the notice would re-fire forever while agy kept
+      returning empty reviews.
+
+    The intent-gate flag still bounds both: this runs only inside a config session
+    the user physically started.
+    """
+    if not rules_present:
+        return True
+    return any(k == "agy.enabled" or k.startswith("ai_providers.") for k in updates)
+
+
 def register_tools(mcp):
     """Register config tools with the FastMCP server."""
 
@@ -555,11 +602,65 @@ def register_tools(mcp):
         #     agy is an enabled provider, so `.agents/hooks.json` is present the moment
         #     the user turns agy on via /team-management:config (matching what the
         #     SessionStart hook does on restart). This is what CONTAINS the agy-cli
-        #     wrapper's --dangerously-skip-permissions review. Merge-aware (never
+        #     wrapper's headless review. Merge-aware (never
         #     clobbers a user's own .agents hooks); best-effort; never affects the result.
+        agy_rules_written = False
         if shared_state._agy_enabled(config):
             shared_state.ensure_agy_readonly_gate_deployed(
                 project_root, shared_state.get_plugin_root())
+            # 8c-ter. Grant agy's headless permission rules. Headless print mode
+            #     auto-denies every command no `permissions.allow` rule covers —
+            #     without these, agy runs and returns an empty review. This is the
+            #     ONLY sanctioned writer: the file is agy's GLOBAL per-user config
+            #     (~/.gemini/antigravity-cli/settings.json — agy has no per-project
+            #     settings and no flag to relocate it), so it is written here, behind
+            #     the user physically running /team-management:config, and never from
+            #     SessionStart. Union merge — never removes a user's own rules.
+            #
+            #     The condition below has TWO disjuncts, each answering a different
+            #     failure. Read them as a pair; neither alone is sufficient.
+            #
+            #     FIRST — `any(k == "agy.enabled" or k.startswith("ai_providers."))`.
+            #     Gated on THIS call touching agy: `_agy_enabled(config)` alone is
+            #     true on every later config write too, so a user editing an unrelated
+            #     key months afterwards would get a silent write outside their project
+            #     with the consent script (config.md, bound to "before enabling agy")
+            #     never shown. Bounded — union merge, no-op once current — but a write
+            #     to another tool's global config should track the moment consent was
+            #     actually asked (code-review W2).
+            #     SECOND — `or not agy_permission_rules_present()`: fire when the
+            #     rules are simply missing. Gating on the update keys
+            #     ALONE created a trap: SessionStart tells the user "run
+            #     /team-management:config to add them", but the flow only touches
+            #     sections the user opts into, and a user whose agy config is already
+            #     correct — exactly the population the notice targets — has no reason
+            #     to enter the AI-providers section. No agy key would be written, so no
+            #     rules would be written, and the notice would re-fire forever while
+            #     agy kept returning empty reviews (code-review round 2, W1). The
+            #     intent-gate flag still bounds this: it only runs inside a config
+            #     session the user physically started.
+            #     REPORTED, not silent. The write lands in another tool's GLOBAL
+            #     per-user config, while the disclosure explaining that lives in the
+            #     AI-providers section of config.md — a section this call may never
+            #     have entered (a user changing `developer_name` in an agy-enabled
+            #     project reaches the second disjunct). Code enforced the write while
+            #     the prompt enforced the disclosure (code-review round 5, W2). Two
+            #     changes close the gap: config.md now shows the disclosure up front
+            #     whenever agy is enabled and the rules are missing, regardless of
+            #     which sections the user picks, and the result below carries
+            #     `agy_permission_rules` so the flow states plainly what was written.
+            if _should_write_agy_rules(updates,
+                                       shared_state.agy_permission_rules_present()):
+                #     `bool(...)`, not an unconditional True: the writer returns False
+                #     on FIVE paths, and the one that matters is the silent bail-out on
+                #     a malformed settings.json (wrong JSON shape, or a non-list
+                #     `permissions.allow`), where it deliberately touches nothing and
+                #     leaves only a stderr breadcrumb the user never sees. Reporting
+                #     "written" there tells the user the rules were added while agy goes
+                #     on auto-denying every command and returning empty reviews — the
+                #     exact silent failure this mechanism exists to prevent
+                #     (code-review round 6, F1).
+                agy_rules_written = bool(shared_state.ensure_agy_permission_rules())
 
         # 8d. Seed the per-project provider-token file (create-if-absent) so the user
         #     has a template to fill in — tokens live in
@@ -575,4 +676,5 @@ def register_tools(mcp):
             pass
 
         return {"success": True, "updated_keys": sorted(updates.keys()),
-                "config_path": str(config_path), "gitignore": gitignore_status}
+                "config_path": str(config_path), "gitignore": gitignore_status,
+                "agy_permission_rules": "written" if agy_rules_written else "unchanged"}

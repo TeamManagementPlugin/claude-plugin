@@ -70,6 +70,8 @@ class SpecReviewGateTestBase(TestCase):
                 "branch": f"feature/{task_name}",
                 "services": [],
                 "updated": "2026-04-20",
+                # The gate runs as the code-review post_func of an active protocol.
+                "protocol": {"name": "task", "current_step": 2, "step_name": "code-review"},
             },
         )
 
@@ -117,6 +119,7 @@ class TestRequireSpecReviewPassed(SpecReviewGateTestBase):
         self._set_task("h-spec-task")
         self._write_log("h-spec-task", notes=[
             {"at": "2026-04-20T00:01:00+00:00", "step": "code-review", "note": "SPEC_REVIEW: PASSED"},
+            {"at": "2026-04-20T00:01:30+00:00", "step": "code-review", "note": "SPEC_DEFERRED: none"},
         ])
         result = self.engine._func_require_spec_review_passed()
         self.assertTrue(result["success"], result)
@@ -125,6 +128,7 @@ class TestRequireSpecReviewPassed(SpecReviewGateTestBase):
         self._set_task("h-spec-task")
         self._write_log("h-spec-task", notes=[
             {"at": "2026-04-20T00:01:00+00:00", "step": "code-review", "note": "  SPEC_REVIEW: PASSED  "},
+            {"at": "2026-04-20T00:01:30+00:00", "step": "code-review", "note": "SPEC_DEFERRED: none"},
         ])
         result = self.engine._func_require_spec_review_passed()
         self.assertTrue(result["success"], result)
@@ -181,6 +185,7 @@ class TestStaleSentinel(SpecReviewGateTestBase):
             notes=[
                 {"at": "2026-04-20T00:01:00+00:00", "step": "code-review", "note": "SPEC_REVIEW: PASSED"},
                 {"at": "2026-04-20T00:04:00+00:00", "step": "code-review", "note": "SPEC_REVIEW: PASSED"},
+                {"at": "2026-04-20T00:04:30+00:00", "step": "code-review", "note": "SPEC_DEFERRED: none"},
             ],
             gotos=[
                 {"from_step": "code-review", "to_step": "implementation",
@@ -196,6 +201,7 @@ class TestStaleSentinel(SpecReviewGateTestBase):
         self._write_log("h-spec-task",
             notes=[
                 {"at": "2026-04-20T00:01:00+00:00", "step": "code-review", "note": "SPEC_REVIEW: PASSED"},
+                {"at": "2026-04-20T00:01:30+00:00", "step": "code-review", "note": "SPEC_DEFERRED: none"},
             ],
             gotos=[
                 {"from_step": "completion", "to_step": "documentation",

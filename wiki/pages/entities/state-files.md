@@ -2,8 +2,8 @@
 title: State Files
 tags: [config, hooks, daic]
 created: 2026-05-31
-updated: 2026-07-14
-sources: [plugin/hooks/shared_state.py, plugin/hooks/task_state_manager.py, plugin/hooks/sessions-enforce.py, plugin/hooks/session-start.py, plugin/hooks/issue_provider_base.py]
+updated: 2026-08-07
+sources: [plugin/hooks/shared_state.py, plugin/hooks/task_state_manager.py, plugin/hooks/sessions-enforce.py, plugin/hooks/session-start.py, plugin/hooks/issue_provider_base.py, plugin/hooks/update_notice.py]
 ---
 
 # State Files
@@ -30,6 +30,7 @@ Paths are relative to `.claude/state/`. "PROTECTED" means a hook (`sessions-enfo
 | `tasks/<task>/transcripts/` | Per-task subagent transcript archives | hooks (`post-tool-use.py`) | No |
 | `{subagent_type}/{key}/` | Per-Task-invocation transcript staging (sanitised type + hash key) | `task-transcript-link.py` (staged), `post-tool-use.py` (archived then `rmtree`) | No |
 | `ai-providers-migration-warned.flag` | One-time legacy-AI-key deprecation warning fired | `session-start.py` | No |
+| `tm-last-seen-version.json` | FALLBACK location of the plugin-update-notice marker (`{"version": "X.Y.Z"}`) — used only when `CLAUDE_PLUGIN_DATA` is unset (dev/legacy); the primary copy lives in the plugin-data dir. PERSISTENT: never cleared at session start, unlike the per-session flags | `update_notice.write_last_seen` (called from `session-start.py`) | No (covered by the `.claude/state` prefix) |
 | `compact-pending.flag` / `auto-compact-triggered.flag` | Compaction checkpoint / monitoring markers | `pre-compact.py`; cleared by `session-start.py` | No |
 | `protocol-end-condition-counter.txt` | Single-int throttle for post-tool-use end-condition reminders | `post-tool-use.py`; deleted by `set_protocol_state` / `clear_protocol_state` | No |
 

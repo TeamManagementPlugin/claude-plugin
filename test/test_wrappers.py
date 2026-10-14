@@ -7,7 +7,7 @@ The tests guard the contract:
 - codex-cli MUST NOT carry the Write tool in its frontmatter.
 - Neither wrapper carries the old review-shape template markers
   (## Critical Issues / ## Warnings) — those are the caller's concern now.
-- agy-cli passes --add-dir + --dangerously-skip-permissions + --print-timeout and
+- agy-cli passes --add-dir + --print-timeout (no permission flag) and
   NEVER --sandbox (the sandbox breaks git on macOS); it is contained by a
   project-local .agents/ read-only deny-gate (preflight-verified) and carries the
   git-status mutation check (detect & report) with the `agy review WARNING:` prefix
@@ -18,12 +18,71 @@ The tests guard the contract:
 Run with: python3 -m pytest test/test_wrappers.py -v
 """
 
+import re
 import subprocess
 import sys
 from pathlib import Path
 from unittest import TestCase, main
 
 PROJECT_ROOT = Path(__file__).parent.parent
+
+
+def _fenced_blocks(text):
+    """Return only the fenced code blocks of an agent markdown — the INVOCATION.
+
+    These wrapper prompts explain at length WHY `--sandbox` and
+    `--dangerously-skip-permissions` were removed, so the words are permanently
+    present in the prose and a whole-file `assertNotIn` cannot express the rule.
+    Keying on an incidental spelling (a trailing line-continuation) let three
+    natural spellings through (test-quality review, round 5); the fences let the
+    assertion mean what it says.
+    """
+    out, inside = [], False
+    for line in text.splitlines():
+        if line.lstrip().startswith("```"):
+            inside = not inside
+            continue
+        if inside:
+            out.append(line)
+    return "\n".join(out)
+
+
+def _cli_invocations(text, binary):
+    """Logical fenced lines that INVOKE `binary` under an `env -i` scrub.
+
+    Backslash-continued lines are joined first, so a redirect placed on the
+    last continuation line (`"$PROMPT" </dev/null 2>&1`) belongs to the
+    invocation it ends. Comment lines are skipped, and the binary must appear
+    as its own token after the scrub — the same filters as
+    `test_provider_env_scrub._fenced_env_lines`.
+    """
+    logical, buf = [], ""
+    for line in _fenced_blocks(text).splitlines():
+        if line.rstrip().endswith("\\"):
+            buf += line.rstrip()[:-1] + " "
+            continue
+        logical.append(buf + line)
+        buf = ""
+    out = []
+    for line in logical:
+        if line.strip().startswith("#") or "env -i" not in line:
+            continue
+        after_scrub = line.split("env -i", 1)[1]
+        if re.search(rf"(?<![\w./-]){re.escape(binary)}(?![\w-])", after_scrub):
+            out.append(line)
+    return out
+
+
+def _prose_states_stdin_rule(text):
+    """True when a line OUTSIDE the fences names both stdin and `</dev/null`."""
+    inside = False
+    for line in text.splitlines():
+        if line.lstrip().startswith("```"):
+            inside = not inside
+            continue
+        if not inside and "stdin" in line and "</dev/null" in line:
+            return True
+    return False
 AGENTS_DIR = PROJECT_ROOT / "plugin" / "agents"
 
 
@@ -50,6 +109,37 @@ class CodexWrapperTest(TestCase):
         self.path = AGENTS_DIR / "codex-cli.md"
         self.text = self.path.read_text(encoding="utf-8")
         self.fm = _parse_frontmatter(self.path)
+
+    def test_subcommand_table_never_pairs_a_scope_flag_with_a_prompt(self):
+        """The §1 lookup table is what the wrapper agent actually reads to build
+        the command — the engine's prompt is only an input to it.
+
+        `codex review` accepts EITHER a positional [PROMPT] or one of
+        `--uncommitted` / `--base` / `--commit`, never both (exit 2, verified on
+        codex-cli 0.145.0 and 0.147.0). This wrapper is pass-through, so a
+        prompt is always present; a table row naming a scope flag steers the
+        agent into either the parse failure or — worse — dropping the caller's
+        prompt and reviewing to codex's own default brief with no error at all.
+        That row is exactly how the shipped code-review prompt stayed inert.
+        """
+        rows = [ln for ln in self.text.splitlines()
+                if ln.startswith("|") and "codex" in ln]
+        self.assertTrue(rows, "the §1 subcommand table went missing")
+        for row in rows:
+            for flag in ("--uncommitted", "--base", "--commit"):
+                self.assertNotIn(flag, row, f"scope flag {flag} in table row: {row}")
+        self.assertTrue(
+            any('codex review "$PROMPT"' in row for row in rows),
+            "no table row invokes `codex review \"$PROMPT\"` — the prompt-bearing "
+            "form is the only correct review invocation for a pass-through wrapper",
+        )
+
+    def test_scope_flag_exclusion_is_stated_explicitly(self):
+        """A table row alone is a weak instruction to an LLM wrapper; the rule
+        must be spelled out, with the real error text, so the agent does not
+        'helpfully' reintroduce a flag it has seen in other codex docs."""
+        self.assertIn("cannot be used with '[PROMPT]'", self.text)
+        self.assertIn("mutually exclusive", self.text)
 
     def test_codex_no_write_tool(self):
         """The Write tool must NOT appear in the codex-cli tools frontmatter.
@@ -98,6 +188,17 @@ class CodexWrapperTest(TestCase):
         self.assertIn("-s read-only", self.text)
         self.assertIn("codex apply", self.text)  # Negative — boundary mentions it
 
+    def test_codex_invocations_detach_stdin(self):
+        """Every codex launch redirects stdin from /dev/null. On the foreground
+        (gtimeout/timeout) branch codex otherwise inherits the caller's open
+        pipe, and `codex exec` reads a non-TTY stdin until the watchdog fires."""
+        calls = _cli_invocations(self.text, "codex")
+        self.assertGreaterEqual(len(calls), 4, calls)
+        for call in calls:
+            self.assertIn("</dev/null", call, call)
+        self.assertTrue(_prose_states_stdin_rule(self.text),
+                        "codex-cli.md must state the stdin rule in prose")
+
 
 class AgyWrapperTest(TestCase):
 
@@ -118,6 +219,17 @@ class AgyWrapperTest(TestCase):
         for required in ("Read", "Bash", "Grep", "Glob"):
             self.assertIn(required, tool_list, f"missing required tool {required}")
 
+    def test_agy_invocations_detach_stdin(self):
+        """Every agy launch redirects stdin from /dev/null, on both watchdog
+        branches — the foreground branch would otherwise inherit the caller's
+        open pipe."""
+        calls = _cli_invocations(self.text, "agy")
+        self.assertGreaterEqual(len(calls), 2, calls)
+        for call in calls:
+            self.assertIn("</dev/null", call, call)
+        self.assertTrue(_prose_states_stdin_rule(self.text),
+                        "agy-cli.md must state the stdin rule in prose")
+
     def test_agy_no_review_template_markers(self):
         self.assertNotIn("## Critical Issues", self.text)
         self.assertNotIn("## Warnings", self.text)
@@ -128,29 +240,29 @@ class AgyWrapperTest(TestCase):
         self.assertNotIn("-m $MODEL", self.text)
         self.assertNotIn('--model', self.text)
 
-    def test_agy_drops_sandbox_uses_skip_permissions(self):
-        """--sandbox breaks git on macOS ($TMPDIR/xcrun block) and must not be
-        PASSED; the wrapper runs --add-dir + --dangerously-skip-permissions
-        instead, contained by the read-only gate. --sandbox may still be MENTIONED
-        in prose (explaining why it's removed), so assert the invocation-flag forms
-        are absent rather than the whole string."""
-        self.assertIn("--dangerously-skip-permissions", self.text)
+    def test_agy_passes_no_permission_or_sandbox_flag(self):
+        """Neither flag may reach the command line: --sandbox breaks git on macOS
+        ($TMPDIR/xcrun block), and --dangerously-skip-permissions is blocked by
+        harness security monitors and made unnecessary by the settings.json
+        permission rules (m-fix-agy-launch-and-gate). Both may still be MENTIONED
+        in prose explaining the removal, so assert on the invocation-flag forms."""
         self.assertIn("--add-dir", self.text)
-        self.assertNotIn("--sandbox \\", self.text)   # not a continuation-line flag
-        self.assertNotIn("agy --sandbox", self.text)  # not inline in the command
+        self.assertNotIn("--dangerously-skip-permissions", _fenced_blocks(self.text))
+        self.assertNotIn("--sandbox", _fenced_blocks(self.text))
 
     def test_agy_passes_print_timeout(self):
         """agy's own deadline must always be passed (the external TIMEOUT_CMD
         is only a backstop and is absent on macOS without coreutils)."""
-        self.assertIn("--print-timeout 300s", self.text)
+        self.assertIn("--print-timeout 480s", self.text)
 
-    def test_agy_requires_gate_preflight_for_skip_permissions(self):
-        """--dangerously-skip-permissions is now REQUIRED (headless soft-deny)
-        but MUST be contained: the wrapper preflight-checks the .agents/ read-only
-        gate and refuses to run uncontained."""
-        self.assertIn("--dangerously-skip-permissions", self.text)
+    def test_agy_preflights_both_containment_layers(self):
+        """Two preflights, two failure modes: the .agents/ read-only gate must be
+        deployed (else agy could run uncontained), and the permission rules must
+        exist (else agy runs, auto-denies everything, and returns an empty review
+        that reads like a clean one)."""
         self.assertIn("team-management-readonly-gate", self.text)
         self.assertIn("read-only gate not deployed", self.text)
+        self.assertIn("permission rules not configured", self.text)
 
     def test_agy_has_mutation_check(self):
         """Detect & report contract: porcelain snapshot before/after the call,
@@ -191,11 +303,41 @@ class AgyWrapperTest(TestCase):
         self.assertIn('if [ -n "$TIMEOUT_CMD" ]', self.text)
 
     def test_agy_external_timeout_exceeds_print_timeout(self):
-        """The external watchdog (330s) must exceed --print-timeout (300s) so
+        """The external watchdog (510s) must exceed --print-timeout (480s) so
         agy's own timeout fires first and yields a clean `unavailable:` reply
         instead of a SIGKILL mid-stream. agy runs under the SEC-003 env scrub,
         so the watchdog wraps `env -i ... agy`."""
-        self.assertIn('330s env -i PATH="$PATH" HOME="$HOME" agy', self.text)
+        self.assertIn(
+            '510s env -i PATH="$PATH" HOME="$HOME" TMPDIR="${TMPDIR:-/tmp}" agy',
+            self.text)
+
+
+class CliInvocationsHelperTest(TestCase):
+    """The stdin guards are only as good as `_cli_invocations`; pin its filters."""
+
+    SAMPLE = (
+        "Prose: env -i PATH=x codex exec   <- outside any fence\n"
+        "```bash\n"
+        '# env -i PATH="$PATH" codex exec   <- a comment\n'
+        'env -i PATH="$PATH" codex exec -s read-only \\\n'
+        '    --output-schema "$SCHEMA" \\\n'
+        '    "$PROMPT" </dev/null 2>&1\n'
+        'env -i PATH="$PATH" codex-other run\n'
+        'cat "$CODEX_OUT"\n'
+        "```\n"
+    )
+
+    def test_continued_invocation_is_one_logical_line(self):
+        calls = _cli_invocations(self.SAMPLE, "codex")
+        self.assertEqual(len(calls), 1, calls)
+        self.assertIn("--output-schema", calls[0])
+        self.assertIn("</dev/null", calls[0])
+
+    def test_unredirected_continued_invocation_is_reported(self):
+        sample = self.SAMPLE.replace(' </dev/null 2>&1', ' 2>&1')
+        calls = _cli_invocations(sample, "codex")
+        self.assertEqual(len(calls), 1, calls)
+        self.assertNotIn("</dev/null", calls[0])
 
 
 class TaskNameInjectionTest(TestCase):

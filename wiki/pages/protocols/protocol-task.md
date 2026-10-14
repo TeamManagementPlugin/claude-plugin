@@ -2,7 +2,7 @@
 title: task Protocol
 tags: [protocols, daic, agents, ai-providers, git]
 created: 2026-05-31
-updated: 2026-07-29
+updated: 2026-10-13
 sources: [plugin/protocol-configs/task.json, plugin/protocol-configs/sub-protocols/task-investigation.md, plugin/protocol-configs/sub-protocols/task-implementation.md, plugin/protocol-configs/sub-protocols/code-review.md, plugin/protocol-configs/sub-protocols/task-completion.md, plugin/protocol-configs/sub-protocols/task-creation.md]
 ---
 
@@ -52,23 +52,26 @@ What the LLM does:
 
 This is the structurally-gated heart of the protocol. It runs in implementation mode (fixes can be applied in place) but cannot be advanced out of without passing two stages.
 
-- **`pre_funcs`**: `resolve_ai_providers`, `require_spec_review_passed`.
-- **`post_funcs`** (`post_funcs_stop_on_failure: true`): `require_spec_review_passed`, `verify_tests_pass`, `check_completion_evidence`, `validate_code_review_in_worklog`, `validate_no_critical_issues_in_worklog` (`task.json`).
+- **`pre_funcs`**: `resolve_ai_providers`, `classify_review_dispatch`.
+- **`post_funcs`** (`post_funcs_stop_on_failure: true`): `verify_review_round`, `require_spec_review_passed`, `verify_tests_pass`, `check_completion_evidence`, `validate_code_review_in_worklog`, `validate_no_critical_issues_in_worklog` (`task.json`).
 
-### Stage 1 — spec compliance (FIRST, before code review)
-The read-only `spec-compliance-reviewer` agent audits the git diff (working tree + staging) against the task's `## Success Criteria` and returns a PASS/FAIL verdict (`code-review.md`). With SC-numbered criteria the Coverage report is keyed per `SC-N` ID; unnumbered/legacy tasks fall back to verbatim criterion text (the agent must not invent IDs). On PASS, the orchestrator records the sentinel `SPEC_REVIEW: PASSED` **verbatim** via `protocol_save_note`. `require_spec_review_passed` runs as both a `pre_func` (entry `[BLOCKED]` reminder) and a `post_func` (hard block — advance is impossible without the sentinel). The post_func also invalidates a stale sentinel if a backward `protocol_goto` to a code-changing step happened after the sentinel's timestamp. **After any in-step code edit**, the PASS is stale and must be re-earned (re-dispatch the agent, re-save the sentinel) — a discipline rule the structural check does not yet enforce.
+### Stage 1 — code-review rounds (FIRST)
+One message dispatches the mandatory Claude `code-review` agent, one `codex-cli`/`agy-cli` per configured provider, and the specialists the diff classifier fired; `red-team` follows as a second echelon. Findings from every source enter at equal weight — as claims. The orchestrator confirms each one in the code itself; a finding it cannot confirm, or that the three-level scale puts lower, is recorded with the reason and drives no change. Confirmed blocking findings are routed by fix depth: SIMPLE (one file, no logic change) is fixed in the step, COMPLEX goes back to implementation, AMBIGUOUS goes back to investigation for the user to decide; the deepest depth wins. A re-review round repeats the full dispatch, and every reviewer gets the scale plus the previous rounds' findings and dispositions so it checks closure instead of reopening settled ground. After every round the orchestrator saves `REVIEW_ROUND: <n> — …`.
 
-### Stage 2 — code quality (after the sentinel)
-One message dispatches **N+1 parallel `Task` calls**: the mandatory Claude `code-review` agent plus one `codex-cli`/`agy-cli` per configured provider (`code-review.md`). Findings are aggregated with **equal weight**; provider output is advisory and never blocks. Every re-review round must repeat the full parallel dispatch (the sub-protocol calls out the anti-pattern of re-running only `code-review` "since the providers already ran"). The final passing review is appended to the work log in the exact `# Code Review: [Title]` format (single `#`) — this is what feeds the MR/PR review documentation.
+### Stage 2 — spec compliance (LAST, on the final tree)
+The read-only `spec-compliance-reviewer` audits the final diff against the task's `## Success Criteria` once, after the last review round. On PASS the orchestrator records `SPEC_REVIEW: PASSED` plus the `SPEC_UNVERIFIABLE:` and `SPEC_DEFERRED:` carriage notes. A documentation criterion not written yet is `DEFERRED` to the documentation step, which re-audits it and saves `SPEC_DEFERRED: PASSED`; `require_deferred_criteria_done` blocks that step until the note matches the current tree. A gap found here is routed like a review finding; a fix made in the step earns one review round on the fix before the audit is re-dispatched.
+
+### Freshness
+`protocol_save_note` stamps `REVIEW_ROUND:`, `SPEC_REVIEW: PASSED` and `SPEC_DEFERRED: PASSED` notes with a hash of the working tree (HEAD + tracked diff + untracked files, excluding `team-management/`, `.claude/`, `.agents/`). `verify_review_round` and `require_spec_review_passed` pass only while the current tree still matches, so an unchanged tree is never re-reviewed and a changed one never passes on an old review. Work-log edits do not change the hash.
 
 ### The advance gates
-On `protocol_advance` out of code-review, four post_funcs must all pass:
-- `require_spec_review_passed` — the sentinel exists and is not stale.
+- `verify_review_round` — the last review round matches the current tree.
+- `require_spec_review_passed` — the sentinel matches the current tree (a sentinel without a hash falls back to the backward-goto timestamp check).
 - `verify_tests_pass` — the **optional** test gate. Runs `config.json:test_command` under `subprocess.run(shell=False, timeout=600)` after a metacharacter scan + prefix allowlist; **skips gracefully** when `test_command` is null/empty/unreadable. Non-zero exit or timeout blocks advance. See [Configuration Schema](pages/entities/configuration-schema.md).
 - `check_completion_evidence` — parses the advance `summary` and **rejects prose predictions**. It must contain a fenced output block, `N/N passed`, `exit 0`, counted check-marks, or the literal `no-verification-applicable: <reason>` escape hatch (`code-review.md`).
 - `validate_code_review_in_worklog` / `validate_no_critical_issues_in_worklog` — the `# Code Review:` block is present and reports zero critical issues.
 
-Warning enforcement (Section 5): the mode is read via the `config_code_review_enforcement` MCP tool as the mandatory first step — a direct `team-management/config.json` read is an error-only fallback (failed call or `success: false`), limited to the single `enforce_warnings` key. In **strict** mode (`enforce_warnings=true`) the LLM fixes all warnings automatically and re-reviews until clean; in **relaxed** mode warnings are documented but don't block. Critical issues always block.
+Warning enforcement (Section 5): the mode is read via the `config_code_review_enforcement` MCP tool. In **strict** mode (`enforce_warnings=true`) a confirmed Warning blocks like a Critical and is routed by fix depth; in **relaxed** mode warnings are documented and non-blocking. Notes never block and never trigger a re-review in either mode.
 
 ## Step 4 — documentation (`mode: documentation`, `skip_notification: true`)
 
@@ -113,8 +116,8 @@ When a phase's flag is off (or no providers configured), the resolver returns `p
 
 ## Gotchas
 
-- **`task` uses the heavy two-stage review; `refactoring` does not.** Only `task` and the optimize pair carry `require_spec_review_passed` + `check_completion_evidence`. The [refactoring](pages/protocols/protocol-refactoring.md) code-review step is lighter (no spec-compliance sentinel). Don't assume the sentinel applies everywhere.
-- **The sentinel goes stale on in-step edits, silently.** The structural staleness check only catches backward `protocol_goto`. If you fix code inside the code-review step after PASS, you must manually re-dispatch the spec-compliance agent and re-save the sentinel — nothing forces it.
+- **All four review protocols share the two-stage review.** `task`, `refactoring` and the optimize pair all run `verify_review_round` + `require_spec_review_passed`; [refactoring](pages/protocols/protocol-refactoring.md) differs only by omitting `verify_tests_pass` (it tolerates baseline failures).
+- **Any code edit after a review note makes it stale — structurally.** Both notes carry the working-tree hash, so a fix made after the last round or after the spec PASS blocks advance until the stage runs again. The hash anchors on `HEAD`: a repository with no commits cannot pass until it has one. A sentinel saved without a hash (an in-flight task from an older version) falls back to the backward-goto timestamp check.
 - **Documentation mode blocks source edits, it doesn't merely discourage them.** An `Edit` to a `.py` file in step 4 is hook-blocked; the contract is `protocol_goto` back to implementation.
 - **`check_completion_evidence` rejects "looks good".** The advance summary out of code-review must carry literal verification evidence or the canonical escape-hatch token. Prose predictions fail the gate.
 - **The work-log severity headings are gate-parsed, and the two gates are NOT emoji-symmetric.** `validate_no_critical_issues_in_worklog` (`protocol_engine.py`) accepts `## Critical Issues (N)` with the 🔴 *optional*, but the warnings gate (`protocol_utils.check_code_review_warnings`, strict mode) *requires* the 🟡 in `## 🟡 Warnings (N)` — a plain `## Warnings (N)` is silently invisible to it. The Critical heading must also carry a concrete digit (`(0)` for "none found"); a literal `(N)` there fails **closed** and blocks completion (Warnings `(N)` merely fails open / non-enforcing). Both the `code-review` agent output template and the `sub-protocols/code-review.md` §4 work-log template emit these emoji headings; `test/test_code_review_heading_gates.py` drift-guards that both parse through both gates.

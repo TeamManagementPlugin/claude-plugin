@@ -148,17 +148,12 @@ def get_review_completion_language(enforce_warnings: bool) -> Dict:
     """
     if enforce_warnings:
         return {
-            "must_pass_language": "MUST pass code review with zero critical issues and acknowledged warnings",
-            "fail_action": "REQUIRED to address or acknowledge",
+            "must_pass_language": "MUST pass code review with zero critical issues and zero confirmed warnings",
+            "fail_action": "REQUIRED to fix every confirmed warning",
             "warning_prompt": (
                 "⚠️  Code review warnings found.\n"
-                "\n"
-                "You must choose how to proceed:\n"
-                "  1. Fix warnings now and re-run code review\n"
-                "  2. Acknowledge warnings and proceed anyway\n"
-                "  3. Cancel task completion\n"
-                "\n"
-                "Your choice (1/2/3): "
+                "Strict mode: every confirmed warning (a defect) is routed by fix depth\n"
+                "and fixed before completion. Notes never block and never trigger a re-review.\n"
             )
         }
     else:
@@ -167,6 +162,6 @@ def get_review_completion_language(enforce_warnings: bool) -> Dict:
             "fail_action": "recommended to address",
             "warning_prompt": (
                 "ℹ️  Code review found warnings.\n"
-                "(Warnings not enforced - task completion will proceed)\n"
+                "(Warnings not enforced - task completion will proceed. Notes never block.)\n"
             )
         }

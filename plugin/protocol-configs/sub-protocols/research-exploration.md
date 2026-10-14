@@ -12,6 +12,8 @@
 
 **Record significant findings** in the task work log under `## AI Provider Input — Research Exploration`. «Significant» = either evidence you adopted into the research synthesis, or one you explicitly rejected (note why in one line). Boilerplate or empty output may be elided. If a wrapper returns `<provider> review unavailable: …`, note the unavailability one-line and proceed.
 
+**Wait for every provider.** Run your own exploration while they work, but do not call `protocol_advance` to synthesis until every dispatched provider has returned — a reply or `<provider> review unavailable: …` — and its findings are recorded above as adopted or rejected. While they run, do only read-only work on the repository. `protocol_save_note`, questions to the user and the provider-input record in an existing task work log stay allowed; if no task work log exists yet, save that record with `protocol_save_note`. A background dispatch does not lift this barrier: wait for each completion notification. A provider that answers after you have acted reviews evidence that no longer exists, and its input is lost.
+
 **Then continue to «Purpose» / «Investigation Strategies» below.**
 
 ## Purpose

@@ -32,13 +32,14 @@ class RefactoringCodeReviewGatesTest(TestCase):
     def test_pre_funcs_exact(self):
         self.assertEqual(
             self.step["pre_funcs"],
-            ["resolve_ai_providers", "require_spec_review_passed"],
+            ["resolve_ai_providers", "classify_review_dispatch"],
         )
 
     def test_post_funcs_exact(self):
         self.assertEqual(
             self.step["post_funcs"],
             [
+                "verify_review_round",
                 "require_spec_review_passed",
                 "check_completion_evidence",
                 "validate_code_review_in_worklog",

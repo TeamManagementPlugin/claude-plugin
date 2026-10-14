@@ -46,22 +46,22 @@
         },
         {
             "name": "synthesis",
-            "description": "Findings document; non-blocking policy-compliance audit",
+            "description": "Findings document; non-blocking policy-compliance audit; CLAUDE.md hygiene gate",
             "mode": "documentation",
-            "post_funcs": ["policy_compliance_audit"],
-            "post_funcs_stop_on_failure": false,
+            "post_funcs": ["policy_compliance_audit", "check_claude_md_hygiene"],
+            "post_funcs_stop_on_failure": true,
             "start": "@sub-protocols/optimize-synthesis.md",
-            "end": "Advance when:\n- [ ] Findings written to the task work log.\n- [ ] policy_compliance_audit results (metric_gaming_flags, if any) propagated as advisory data into the next step's prompt.\nThis step never blocks advance."
+            "end": "Advance when:\n- [ ] Findings written to the task work log.\n- [ ] policy_compliance_audit results (metric_gaming_flags, if any) propagated as advisory data into the next step's prompt.\n- [ ] check_claude_md_hygiene passes for any CLAUDE.md this run touched.\npolicy_compliance_audit never blocks advance; check_claude_md_hygiene does."
         },
         {
             "name": "code-review",
             "description": "Spec-compliance review + code-quality review on the cumulative diff baseline..best_commit",
             "mode": "implementation",
-            "pre_funcs": ["resolve_ai_providers", "require_spec_review_passed"],
-            "post_funcs": ["require_spec_review_passed", "verify_tests_pass", "check_completion_evidence", "validate_code_review_in_worklog", "validate_no_critical_issues_in_worklog"],
+            "pre_funcs": ["resolve_ai_providers"],
+            "post_funcs": ["verify_review_round", "require_spec_review_passed", "verify_tests_pass", "check_completion_evidence", "validate_code_review_in_worklog", "validate_no_critical_issues_in_worklog"],
             "post_funcs_stop_on_failure": true,
             "start": "@sub-protocols/code-review.md",
-            "end": "Advance when:\n- [ ] Spec compliance review passed — SPEC_REVIEW: PASSED sentinel recorded.\n- [ ] Code review passes with zero critical issues.\n- [ ] Final passing review appended to the task work log under '# Code Review:'.\n- [ ] Advance summary contains verification evidence or 'no-verification-applicable: <reason>'."
+            "end": "Advance when:\n- [ ] Latest REVIEW_ROUND note matches the current tree — no code change after the final round.\n- [ ] Code review passes with zero critical issues.\n- [ ] Warnings: strict (enforce_warnings=true) → zero confirmed warnings (defects); relaxed (false or not set) → documented, non-blocking. Notes never block.\n- [ ] Final passing review appended to the task work log under '# Code Review:'.\n- [ ] Advance summary contains verification evidence or 'no-verification-applicable: <reason>'.\n- [ ] Spec compliance audit passed on the final tree — SPEC_REVIEW: PASSED sentinel recorded after the last review round, followed by its SPEC_UNVERIFIABLE: and SPEC_DEFERRED: carriage notes."
         },
         {
             "name": "completion",

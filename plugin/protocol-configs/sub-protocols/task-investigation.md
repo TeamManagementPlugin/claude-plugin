@@ -14,6 +14,8 @@ SCOPE OF THIS STEP: Understand the request, explore the codebase, align with the
 
 **Record significant findings** in the task work log under `## AI Provider Input — Investigation`. «Significant» = either context you adopted into the task scope / success criteria (becomes a clarifying question or a Context Files entry), or one you explicitly rejected (note why in one line). Boilerplate or empty output may be elided. If a wrapper returns `<provider> review unavailable: …`, note the unavailability one-line and proceed.
 
+**Wait for every provider.** Explore the codebase while they run, but do not present the alignment summary (§7) to the user or call `protocol_advance` until every dispatched provider has returned — a reply or `<provider> review unavailable: …` — and its findings are recorded above as adopted or rejected. While they run, do only read-only work on the repository. `protocol_save_note`, questions to the user and the provider-input record in an existing task work log stay allowed; if no task work log exists yet, save that record with `protocol_save_note`. A background dispatch does not lift this barrier: wait for each completion notification. A provider that answers after you have acted reviews a task scope that no longer exists, and its input is lost.
+
 **Then continue to Section 1.**
 
 ## 1. Understand and Explore
@@ -36,6 +38,12 @@ Three-step procedure for clarifying questions:
 **Output buffer** — before the `AskUserQuestion` tool call, output 2-3 blank lines after your prose context. The widget renders over the tail of the prior text and visually swallows the last few lines; blank-line padding keeps your context visible.
 
 **One question per `AskUserQuestion` call. Large questions need context — bundling multiple into one widget forces the user to hold parallel state.**
+
+**Evidence grounding** — never ask a question in the abstract: anchor it to a verbatim quote, a `file:line`, or a concrete data point you found. If you cannot cite what raised the question, you have not investigated enough to ask it.
+
+**Re-grounding after pauses** — assume the user hasn't looked at this window in 20 minutes: before a question that follows a long silent stretch of work, restate the minimal context (what was decided, what is being asked now).
+
+**Dual-scale effort estimates** — when a scope question involves effort, give both scales: human effort (hours/days) and AI-session effort (minutes/sessions). The scales diverge wildly; a single number misleads whichever way the user reads it.
 
 #### Worked Example
 

@@ -128,3 +128,6 @@ Canonical reasons: `documentation-only`, `planning-step`, `discussion-step`, `no
 | "Emergency, no time for process." | Systematic debugging is faster than thrashing. Guessing under pressure multiplies the problem. |
 | "One more fix attempt" (after 2 failures). | Three failures = architectural problem. Stop and question the pattern. |
 | "I'll write the test after confirming the fix works." | Untested fixes don't stick. A passing test written after is not a regression test — you never saw it fail. |
+| "Pre-existing failure, not from my change." | Without receipts that is a guess. Prove it on main or say "unverified". |
+| "I already tested this earlier." | The code changed since. Earlier runs prove nothing about the current tree. |
+| "It's a trivial change." | Trivial changes break production. The process is fast for trivial changes. |

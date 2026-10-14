@@ -27,7 +27,17 @@ handful of prompts.
    absent from `schema` (those are either secrets — set in the token file — or
    engine-managed state).
 
-2. **State the token-redirect up front:**
+2. **Check agy's global permission rules BEFORE walking the sections.** If `config_get`
+   shows agy enabled (`agy.enabled` true and `"agy"` in `ai_providers.enabled_providers`),
+   show the global-write disclosure from section 5 below **now**, not later. The write
+   can happen in ANY `config_update` call while the rules are missing — including one
+   that only changes `developer_name` — so binding the disclosure to a section the user
+   might skip means a write to another tool's global config with nothing shown. After any
+   write, the response carries `agy_permission_rules`: `"written"` means the rules were
+   added to `~/.gemini/antigravity-cli/settings.json`; say so plainly. `"unchanged"` needs
+   no mention.
+
+3. **State the token-redirect up front:**
    > Tokens (GitLab / Jira / GitHub / Telegram) are NOT configured here. Set them in
    > the per-project file `.claude/state/provider-tokens.json` — a git-ignored,
    > owner-only (0600) file the AI agent cannot read. It is created for you (with all
@@ -35,7 +45,7 @@ handful of prompts.
    > session; open it in your editor and fill in only the tokens you use. Each project
    > has its own file, so different projects can use different tokens.
 
-3. **Walk the sections in order**, one `AskUserQuestion` at a time. For each
+4. **Walk the sections in order**, one `AskUserQuestion` at a time. For each
    section, first ask whether the user wants to configure it (offer a clear
    "skip — leave as-is" option). **Skip if not needed.** When they do want it,
    gather the section's values with `AskUserQuestion`, then make **ONE**
@@ -63,12 +73,56 @@ handful of prompts.
    5. **AI providers** — `ai_providers.enabled_providers`, the six
       `ai_providers.include_in_*` flags, `ai_providers.timeout`, `codex.enabled`,
       `agy.enabled`.
+      **If `config_get` shows agy already enabled, do not skip this section on the
+      strength of "nothing to change".** The commonest reason a user is here is the
+      session-start `[agy — setup required]` notice: agy is enabled and its permission
+      rules are missing, so its reviews come back empty. Show the disclosure below and
+      offer to write the rules; the writer is idempotent, so re-running it on an
+      already-configured machine is a no-op.
+
+      **Before enabling agy — or when re-writing the rules for an already-enabled agy —
+      say this plainly and let the user decide** (it writes outside the project, so it
+      must not be a surprise):
+      > Enabling agy adds permission rules — `command(git status)`, `command(git diff)`,
+      > `command(cat)`, `command(rg)` and similar — to your GLOBAL agy config at
+      > `~/.gemini/antigravity-cli/settings.json`. agy has no per-project settings
+      > file, so this is per machine, once. Without the rules, headless agy
+      > auto-denies every command and returns an empty review that looks like a
+      > clean one. The write is a MERGE: rules you added yourself are never removed.
+      > To revoke, disable agy — deleting the rules alone is undone on the next
+      > `/team-management:config` run, because the flow re-adds them whenever agy is
+      > enabled and they are missing.
+      >
+      > Be precise about the effect, because the rules are global and the project's
+      > deny-gate is not: in THIS project the gate decides what agy may actually do,
+      > but in your OTHER repositories these rules apply with no gate behind them.
+      > There, the listed commands stop asking for confirmation. `git` is granted per
+      > subcommand — never as a bare `command(git)` — so `git push`, `git reset`,
+      > `git commit` and `git checkout` still prompt everywhere. `git remote`,
+      > `git config`, `find`, `sed`, `sort`, `uniq` and `file` are deliberately not
+      > granted at all, because `git remote set-url`, `git config a b`,
+      > `find -exec`/`-delete`, `sed -i`, `sort --compress-program`, `uniq IN OUT`
+      > and `file -C` mutate or execute with no gate behind them. Two granted commands still have sharper forms
+      > that only the project gate refuses: `git branch -D` (deletes a branch;
+      > recoverable via reflog) and `git grep -O<cmd>` / `--open-files-in-pager`
+      > (runs a pager program; the gate refuses both the short and the abbreviated
+      > long spellings).
+      >
+      > One boundary worth stating outright: the gate stops agy from CHANGING your
+      > machine or reaching the network — it does not stop it from READING. `cat` is
+      > granted, so anything readable in the workspace can be sent to the provider as
+      > part of a review. Do not enable agy on a repository whose contents you would
+      > not paste into a third-party service.
    6. **wiki** — `wiki.enabled`. If enabling and `wiki/` is absent, offer to seed
       the wiki structure (`index.md`, `log.md`, `schema.md`, `raw/README.md`; pages
       live in lazily-created `pages/<category>/` subdirectories, and `schema.md`
       carries the `## Categories` list).
    7. **code review & display** — `code_review.enforce_warnings` (boolean; when true,
-      code-review warnings must be acknowledged before task completion),
+      every confirmed code-review Warning — a defect, or changed behaviour no test
+      exercises — blocks completion until fixed; Notes never block),
+      `documentation.claude_md_hygiene` (boolean, default true — block the documentation
+      step when a task adds task names, history or review chatter to a CLAUDE.md),
+      `documentation.claude_md_max_lines` (positive integer, default 300),
       `features.icon_style` (`nerd_fonts` / `emoji` / `ascii` — the statusline icon set).
    8. **notifications** — `notifications.enabled`, `notifications.mode`
       (`per_step` / `off`), `notifications.prefix`, `notifications.channels.telegram.enabled`,
@@ -111,7 +165,7 @@ handful of prompts.
          that includes the proxy root). The bot token is fine in this case — do NOT tell
          the user to re-check it.
 
-4. **Batched write contract.** Each section's `config_update` takes a flat object
+5. **Batched write contract.** Each section's `config_update` takes a flat object
    of dotted keys, e.g.:
    ```
    config_update(updates={
@@ -136,11 +190,11 @@ handful of prompts.
    `team-management/config.json` is in `.gitignore`. `already_covered` needs no
    mention.
 
-5. **If `config_update` is refused as "gated"**, the session window expired — tell
+6. **If `config_update` is refused as "gated"**, the session window expired — tell
    the user to run `/team-management:config` again (the hook re-opens the gate).
    Never try to write the flag yourself; you cannot, and you should not.
 
-6. **Confirm.** After the sections the user wanted, call `config_get` once more and
+7. **Confirm.** After the sections the user wanted, call `config_get` once more and
    show the resulting (masked) config so they can verify.
 
 ## Rules

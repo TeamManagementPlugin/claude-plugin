@@ -35,6 +35,8 @@ The audit returns a `metric_gaming_flags` list in the post_funcs result. For eac
 
 This step is `mode: documentation` — only `team-management/tasks/<task>.md` and `CLAUDE.md` files are editable. If you discover a bug that needs a code edit, `protocol_goto(step_name="experimentation")` first; do not write TODOs or skip fixes.
 
+A CLAUDE.md line you add must describe the code as it is now. The `check_claude_md_hygiene` post_func blocks advance when an added line names a task, uses history wording or carries review chatter, or when a CLAUDE.md grew past its line budget — run findings, leaderboards and iteration history belong in the task work log, not in CLAUDE.md.
+
 ## 5. Advance Summary
 
 ```

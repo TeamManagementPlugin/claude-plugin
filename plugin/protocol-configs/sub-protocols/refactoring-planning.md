@@ -16,6 +16,8 @@ SCOPE OF THIS STEP: Define what will be refactored, why, and how. Create the tas
 
 **Record significant findings** in the task work log under `## AI Provider Input — Refactoring Planning`. «Significant» = either a finding you adopted into your refactoring plan, or one you explicitly rejected (note why in one line). Boilerplate or empty output may be elided. If a wrapper returns `<provider> review unavailable: …`, note the unavailability one-line and proceed.
 
+**Wait for every provider.** Draft the plan while they run, but do not present it to the user for approval or call `protocol_advance` until every dispatched provider has returned — a reply or `<provider> review unavailable: …` — and its findings are recorded above as adopted or rejected. While they run, do only read-only work on the repository. `protocol_save_note`, questions to the user and the provider-input record in an existing task work log stay allowed; if no task work log exists yet, save that record with `protocol_save_note`. A background dispatch does not lift this barrier: wait for each completion notification. A provider that answers after you have acted reviews a plan that no longer exists, and its input is lost.
+
 **Then continue to Section 1 below.**
 
 ## 1. Plan the Refactoring

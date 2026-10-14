@@ -363,8 +363,26 @@ All hook types can include these optional fields:
   "continue": true, // Whether Claude should continue after hook execution (default: true)
   "stopReason": "string" // Message shown when continue is false
   "suppressOutput": true, // Hide stdout from transcript mode (default: false)
+  "systemMessage": "string", // Warning message shown directly to the USER
+  "terminalSequence": "string" // Terminal escape sequence Claude Code emits for you
 }
 ```
+
+| Field | Default | Description |
+| ----- | ------- | ----------- |
+| `continue` | `true` | If `false`, Claude stops processing entirely after the hook runs. Takes precedence over any event-specific decision field |
+| `stopReason` | none | Message shown to the user when `continue` is `false`. Not shown to Claude |
+| `suppressOutput` | `false` | If `true`, hides the hook's stdout from the transcript. Stdout still appears in the debug log |
+| `systemMessage` | none | Warning message shown to the user |
+| `terminalSequence` | none | A terminal escape sequence for Claude Code to emit on your behalf (desktop notification, window title, bell) |
+
+**`systemMessage` is the only channel a hook has for reaching the USER
+deterministically.** `additionalContext` (and hook stdout generally) goes to the
+MODEL: Claude cannot speak before the user's first message, and any instruction
+buried in context competes with that message. When a hook must be *seen* — not
+merely known to Claude — emit a short `systemMessage`. team-management uses it
+for the plugin-update banner (`session-start.py` / `update_notice.py`), keeping
+the full release notes in `additionalContext` for elaboration on request.
 
 If `continue` is false, Claude stops processing after the hooks run.
 
@@ -459,14 +477,24 @@ to Claude.
 
 `SessionStart` hooks allow you to load in context at the start of a session.
 
-* `"hookSpecificOutput.additionalContext"` adds the string to the context.
+There is no blocking or decision control — `SessionStart` is context-only.
+
+* `"hookSpecificOutput.additionalContext"` adds the string to Claude's context.
+* `"hookSpecificOutput.initialUserMessage"` seeds a first user message.
+* `"hookSpecificOutput.watchPaths"` registers paths for the session to watch.
+* `"hookSpecificOutput.sessionTitle"` sets the session title.
+* `"hookSpecificOutput.reloadSkills"` re-reads the available skills.
+* The universal `systemMessage` field (see Common JSON Fields) is the way to put
+  something in front of the USER at session start — `additionalContext` is read
+  by Claude only, and Claude produces no output until the user sends a message.
 
 ```json
 {
   "hookSpecificOutput": {
     "hookEventName": "SessionStart",
     "additionalContext": "My additional context here"
-  }
+  },
+  "systemMessage": "Short line shown directly to the user"
 }
 ```
 

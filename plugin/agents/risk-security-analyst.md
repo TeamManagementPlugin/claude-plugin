@@ -65,13 +65,19 @@ When working in a project with team-management installed:
 | ... | operational/security | Low/Med/High | Low/Med/High | P*I | Strategy |
 
 ### Security Findings
-For critical findings:
+For each finding:
 - **ID**: SEC-001, etc.
 - **Severity**: Critical / High / Medium / Low
+- **Status**: VERIFIED / UNVERIFIED / TENTATIVE
 - **Description**: What the vulnerability is
 - **Attack scenario**: How it could be exploited
 - **Affected components**: File paths and line numbers
 - **Remediation**: Specific fix recommendation
+
+**Status labels** (mandatory on every finding):
+- **VERIFIED** — traced to a concrete code path and backed by a verbatim quote of the affected code.
+- **UNVERIFIED** — plausible from code reading; not traced end-to-end.
+- **TENTATIVE** — speculative, pattern-based concern; needs investigation before acting on it.
 
 ### Dependency Assessment
 For each new dependency: name, version, license, maintenance status, alternatives.

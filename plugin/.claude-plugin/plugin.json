@@ -1,7 +1,7 @@
 {
   "name": "team-management",
   "displayName": "team.management",
-  "version": "0.4.4",
+  "version": "0.4.5",
   "description": "Your AI on rails. On your terms. An open-source protocol engine that puts every process on rails — enforced as it happens, so your AI can't fake the work.",
   "author": { "name": "Team Management" },
   "homepage": "https://team.management",

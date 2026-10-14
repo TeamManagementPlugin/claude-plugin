@@ -174,8 +174,8 @@ def _refresh_file_if_changed(src, dest):
 
 
 # --- agy read-only PreToolUse deny-gate deployment ------------------------------
-# The agy-cli wrapper runs `agy --dangerously-skip-permissions` for headless review
-# (headless print mode otherwise soft-denies every command). skip-permissions is
+# The agy-cli wrapper runs agy headlessly for review, with NO permission flag: it is
+# unblocked by the `permissions.allow` rules below (`_AGY_PERMISSION_RULES`) and
 # CONTAINED by a project-local `.agents/hooks.json` PreToolUse hook that hard-denies
 # any tool call outside a read-only allowlist. team-management deploys that gate into
 # a project whenever agy is an enabled provider (SessionStart + config_update).
@@ -225,7 +225,7 @@ def agy_gate_is_deployed(project_root):
     """True iff a project's .agents/hooks.json already carries our named gate hook.
 
     Consumed by the agy-cli wrapper's preflight so it never runs
-    ``--dangerously-skip-permissions`` uncontained. Requires ALL of: the gate
+    uncontained. Requires ALL of: the gate
     script present, hooks.json parseable as a JSON object, and our named entry
     DEEP-EQUAL to the canonical entry (so a tampered command target, a hook
     pointed at another script, or a structurally-wrong entry fails the check
@@ -298,6 +298,176 @@ def ensure_agy_readonly_gate_deployed(project_root, plugin_root):
     except Exception as exc:
         sys.stderr.write(
             f"[team-management] could not deploy agy read-only gate: {exc}\n"
+        )
+        return False
+
+
+# --------------------------------------------------------------------------
+# agy headless permission rules
+#
+# agy's headless print mode has no one to answer a permission prompt, so it
+# AUTO-DENIES every `run_command` tool call that no `permissions.allow` rule
+# grants. The framework used to get past that with `--dangerously-skip-permissions`;
+# harness security monitors flag that flag as an unauthorized invocation, and it was
+# verified unnecessary — headless runs honor settings.json permissions
+# (m-fix-agy-launch-and-gate).
+#
+# LAYERING — read this before widening the list. A `command(...)` rule is NOT a
+# security boundary: it says only which binary agy may ATTEMPT. The read-only
+# deny-gate (`templates/agy-readonly-gate.py`) is what decides whether the actual
+# invocation is a read, and it runs on every call.
+#
+# The catch that shapes this list: the gate is deployed PER PROJECT, but this file
+# is GLOBAL. In the user's other repositories the rules apply and the gate does not,
+# so a rule must be defensible on its own, without assuming containment. That is why
+# git is granted per subcommand rather than as `command(git)` — a bare grant would
+# auto-approve `git push --force` everywhere on the machine. `command(*)` is never
+# used; it would restore exactly the blast radius the removed flag had.
+#
+# The two lists must stay in step in the other direction too: a base command the gate
+# allows but no rule grants is auto-denied before the gate ever sees it (drift-guarded
+# in test/test_agy_permission_rules.py).
+#
+# This file is GLOBAL to the user (~/.gemini/antigravity-cli/settings.json; agy
+# offers no per-project settings file and no CLI flag to point elsewhere — the path
+# derives from HOME, which cannot be redirected because agy's auth lives there too).
+# Writing another tool's global config is therefore consent-gated: only the
+# /team-management:config flow calls the writer, never SessionStart.
+# INVARIANT: this list must stay a SUPERSET of the deny-gate's base commands
+# (`_READONLY_COMMANDS` in plugin/templates/agy-readonly-gate.py). A command the gate
+# is willing to treat as read-only but no rule grants is auto-denied one layer earlier,
+# and headless agy reports that as nothing at all — the silent-empty-review failure this
+# whole mechanism exists to prevent. The reverse direction is intentional, not an
+# oversight: `git remote` and `git config` pass the gate and are deliberately ungranted.
+#
+# Nothing enforces this at runtime. The two lists live in different files (the gate's
+# hyphenated filename cannot be imported without importlib) and are kept in step by
+# `test/test_agy_permission_rules.py::RulesMirrorGate`, which loads the gate module and
+# compares the sets. Know its limit before trusting it: the git rules are collapsed to
+# the single base token `git` for the comparison, so ADDING A GIT SUBCOMMAND to the gate
+# without adding its `command(git <sub>)` rule here is NOT caught. Check that pairing by
+# hand, and run the suite after editing either list.
+_AGY_PERMISSION_RULES = [
+    # git is granted PER SUBCOMMAND, never as a bare `command(git)`. A bare grant
+    # would prefix-match `git push --force`, `git reset --hard` and `git commit` —
+    # and because this file is GLOBAL, that grant applies in the user's other
+    # repositories too, where no deny-gate is deployed to refuse them. The gate is
+    # the boundary, and the gate only exists inside team-management projects, so the
+    # global grant must be narrow on its own terms (code-review W1).
+    "command(git status)", "command(git diff)", "command(git log)",
+    "command(git show)", "command(git rev-parse)", "command(git ls-files)",
+    "command(git blame)", "command(git cat-file)", "command(git describe)",
+    "command(git shortlog)", "command(git ls-tree)", "command(git merge-base)",
+    "command(git rev-list)", "command(git diff-tree)", "command(git grep)",
+    "command(git branch)",
+    # `git remote` and `git config` are deliberately NOT granted: their mutating
+    # forms (`remote add`/`set-url`, `config a b`) rewrite .git/config, and outside
+    # a gated project nothing would stop them. The gate still allows their read
+    # forms, so a user who adds those rules by hand stays contained here — the
+    # asymmetry is intentional, not an oversight.
+    #
+    # `find`, `sed`, `sort`, `uniq` and `file` are absent for the same reason
+    # (code-review rounds 2 C4 and 4 C1/C3/W3): `find -exec`/`-delete`, `sed -i`,
+    # `sort --compress-program=<cmd>` (executes it), `uniq IN OUT` (writes its second
+    # operand with no flag at all) and `file -C -m` (compiles a magic file to disk)
+    # are all exec or write, and a global grant has no gate behind it in the user's
+    # other repositories. All five were dropped from the GATE too — the two lists
+    # move together, and the drift guard asserts it.
+    "command(ls)", "command(cat)", "command(head)", "command(tail)",
+    "command(wc)", "command(grep)", "command(egrep)", "command(fgrep)",
+    "command(rg)", "command(pwd)", "command(stat)", "command(nl)",
+    "command(cut)", "command(tr)", "command(column)",
+]
+
+_AGY_SETTINGS_REL = ('.gemini', 'antigravity-cli', 'settings.json')
+
+
+def _agy_settings_path(home=None):
+    """Absolute path to agy's global settings.json (home overridable for tests)."""
+    base = Path(home) if home is not None else Path.home()
+    return base.joinpath(*_AGY_SETTINGS_REL)
+
+
+def agy_permission_rules_present(home=None):
+    """True iff agy's settings.json grants every rule the framework needs.
+
+    Partial coverage counts as NOT present: a missing rule silently removes a
+    command from agy's reach mid-review, which reads as a thin review rather than
+    an error. Consumed by the SessionStart notice and the agy-cli wrapper preflight.
+    Best-effort — any error → False.
+    """
+    try:
+        path = _agy_settings_path(home)
+        if not path.exists():
+            return False
+        data = json.loads(path.read_text(encoding='utf-8'))
+        if not isinstance(data, dict):
+            return False
+        perms = data.get('permissions')
+        if not isinstance(perms, dict):
+            return False
+        allow = perms.get('allow')
+        if not isinstance(allow, list):
+            return False
+        return all(rule in allow for rule in _AGY_PERMISSION_RULES)
+    except Exception:
+        return False
+
+
+def ensure_agy_permission_rules(home=None):
+    """Merge the canonical read-only allow rules into agy's global settings.json.
+
+    UNION merge: every pre-existing top-level key, the `deny` list, and every rule
+    the user added are preserved — this function only ever ADDS, never removes.
+    Skips the write when the rules are already present (no needless churn).
+
+    A settings.json that is unparseable, or whose `permissions` block is not an
+    object, is left UNTOUCHED with a stderr breadcrumb rather than repaired: a
+    malformed permissions rule is known to hang agy's print mode indefinitely, so
+    guessing at a broken file is worse than leaving it to the user.
+
+    Consent-gated — call ONLY from the /team-management:config flow. Best-effort:
+    any error → one stderr breadcrumb + False. Returns True when it wrote.
+    """
+    try:
+        path = _agy_settings_path(home)
+        data = {}
+        if path.exists():
+            try:
+                data = json.loads(path.read_text(encoding='utf-8'))
+            except (OSError, ValueError):
+                data = None
+            if not isinstance(data, dict):
+                sys.stderr.write(
+                    "[team-management] agy settings.json is not a JSON object; "
+                    "leaving it untouched (agy permission rules not written)\n"
+                )
+                return False
+        perms = data.get('permissions', {})
+        if not isinstance(perms, dict):
+            sys.stderr.write(
+                "[team-management] agy settings.json `permissions` is not an object; "
+                "leaving it untouched (agy permission rules not written)\n"
+            )
+            return False
+        allow = perms.get('allow', [])
+        if not isinstance(allow, list):
+            sys.stderr.write(
+                "[team-management] agy settings.json `permissions.allow` is not a list; "
+                "leaving it untouched (agy permission rules not written)\n"
+            )
+            return False
+        missing = [rule for rule in _AGY_PERMISSION_RULES if rule not in allow]
+        if not missing:
+            return False  # already current
+        perms['allow'] = list(allow) + missing
+        data['permissions'] = perms
+        path.parent.mkdir(parents=True, exist_ok=True)
+        _write_json_durable(path, data)
+        return True
+    except Exception as exc:
+        sys.stderr.write(
+            f"[team-management] could not write agy permission rules: {exc}\n"
         )
         return False
 

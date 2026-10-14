@@ -2,6 +2,34 @@
 
 Chronological record of wiki operations.
 
+## [2026-08-18] update | ai-provider-integration + protocol-engine + specialized-agents + index — the code-review phase joins the template set (m-fix-codex-review-prompt-inert)
+
+`code_review` was the last of the six AI-provider phases still carrying an inline prompt, and that prompt instructed `codex review --uncommitted` with a literal `<list>` placeholder. The flag is mutually exclusive with a positional prompt (`error: the argument '--uncommitted' cannot be used with '[PROMPT]'`, exit 2, verified on codex-cli 0.145.0 and 0.147.0), so the caller's brief was discarded and codex reviewed to its own default — **without erroring**, which is why it went unnoticed: a plausible review came back every time. **ai-provider-integration** edits: the phase is now template-driven like the other five (12 shipped templates, not 10); the sandbox-flag check runs against the RAW template rather than the rendered prompt, because validating the rendered text conflates template drift with task content in both directions (a task body merely naming a flag would block dispatch; one naming `-s read-only` would satisfy a check the template failed); the check now covers all three flags the CLI refuses alongside a prompt (`--uncommitted` / `--base` / `--commit`), matched as whole tokens so `--baseline` does not trip it, and is driven by the same dual gate as dispatch so a listed-but-disabled provider's stale template cannot block an enabled sibling; new `{changed_files}` context var (`git status -z`, rename-aware, capped at 200 with an explicit dropped-count line, fenced as untrusted) replaces the never-substituted `<list>`; the credential-filter count corrected to 17. **protocol-engine** edits: the registry row grew to 8 fields (`needs_changed_files`, true for `code_review` alone — context vars are built BEFORE the `include_in_*` gate is read, so an unconditional git call would fire on every phase); `_PHASES_TEMPLATE_DRIVEN` is now all six; a fork via `customize_protocol` carries the review prompt too. **specialized-agents** edit: the codex wrapper's invocation is `codex review "$PROMPT"` with no scope flag in any row. Two prompt-integrity hazards found during review and closed: a repository-controlled path or task name matching the PEM BEGIN marker armed the credential filter's stateful pass and silently redacted the rest of the prompt — including the invocation instruction — and the control-char scrub missed `\x85` / `U+2028` / `U+2029`, which `str.splitlines()` (and therefore the filter) does treat as line breaks, letting one filename forge extra list entries. Both are handled by disarming/scrubbing in one shared helper rather than redacting, so the value stays legible and the prompt stays intact. **index** edit: the pattern count in the page hook. A later correction in the same task fixed the page's `## Credential Filter` grouping, whose "Key names in assignment context" heading — copied from the source list's own section header — spanned 13 names of which EIGHT are unanchored. Exactly five patterns carry the `[:=]` anchor (`plugin-option`, `credentials`, `secret`, `token`, `password`); the rest fire without a separator, which is why an ordinary filename or task name can be redacted out of a provider prompt. The claim is now machine-checked by `test_assignment_anchored_pattern_set_is_exactly_five`, since prose mis-stated it twice.
+
+## [2026-08-11] update | review-dispatch-gate + index — the classifier measured its own bookkeeping (m-fix-review-classifier-framework-paths)
+
+`_measure_review_diff` applied no path exclusions, so the framework's own working tree counted toward the 50/200 dispatch thresholds — above all the task markdown, which routinely runs to several hundred lines of investigation narrative. Observed live: a dispatch log recording 1071 then 1839 changed lines for a change whose 628-line task file sat inside the count, in a project that tracks `team-management/`. Two consequences: the thresholds measured how verbosely the task was written rather than how large the change was, and since red-team is deliberately not docs-gated, a docs-only change carrying a long task file could cross 200 and summon the second echelon on nothing. **review-dispatch-gate** edit: Decision Rules gained a framework-path exclusion bullet (`_FRAMEWORK_PATH_ROOTS` = `team-management` / `.claude` / `.agents`, first-component match so `src/team-management/x.py` stays measured; `wiki/` and `docs/` deliberately NOT excluded as project content) and the docs/config-only rule now reads over PROJECT paths only; Telemetry gained `framework_lines_excluded`, which makes the log explain its own numbers and doubles as the rollout marker — a record carrying the key is post-exclusion by construction, so the two `diff_lines` series stay distinguishable; the drift-guard test count refreshed to match the collected count. Recorded limitation: the roots are excluded WHOLESALE, so user-authored custom protocols and funcs under `team-management/protocol-configs/custom/` are excluded too — such a change measures as an empty diff and summons no chain specialist, though the mandatory code-review agent is not classifier-gated and still runs. **index** edit: the exclusion named in the page's hook.
+
+## [2026-08-10] update | update-notice + index — one-release transition window for markerless installs (m-fix-update-notice-first-run-window)
+
+The notice mechanism itself shipped in 0.4.5, so every install predating it has no marker at all — under the plain first-run rule ("a fresh install has no update to announce") 0.4.5 was the one release the mechanism could never announce, and the one-shot marker was spent announcing nothing. **update-notice** edit: new "The One-Release Transition Window" section covering the gate (marker path with NO directory entry *and* installed version exactly the mechanism release → stored version read as the last pre-mechanism release, then the ordinary upgrade path), why absence is probed with `lstat` rather than `Path.exists()` (exists() follows symlinks, so a dangling symlink would read as absent; `follow_symlinks=False` is 3.12+; only `FileNotFoundError` counts as absence), the deliberate absent-vs-corrupt split (a marker that EXISTS but is unreadable is no evidence of a pre-mechanism install and must not dump a release backlog), tuple-not-string version comparison, the window substituting only the stored version so every downstream silent path keeps its semantics, and the accepted one-release inaccuracy for genuinely fresh installs. Marker Semantics amended to point at it. **Release-Pipeline Couplings** gained the version-bump gate: going inert *too early* would be invisible (no test, no CI signal, indistinguishable from a correct retirement), so `test_transition_window_still_targets_the_shipped_version` fails the `test` CI job — which `release` declares `needs:` on — if `plugin.json` moves past the window while the constants still exist, and `pytest.skip`s itself once they are deleted; noted there that a retarget moving only `_MECHANISM_RELEASE_VERSION` and not `_ASSUMED_BASELINE_VERSION` announces two sections instead of one. **index** edit: the window named in the page's hook.
+
+## [2026-08-09] update | update-notice + hooks-system + index — hybrid delivery of the plugin-update notice (m-fix-update-notice-delivery)
+
+The context-only notice was generated correctly but never reached the user: `additionalContext` goes to the MODEL, which cannot speak before the user's first message, while the one-shot marker was spent regardless. **update-notice** edit: new "Why Two Halves" section explaining the channel constraint, the `format_banner` / dict-contract mechanism (`banner` + `context` + versions), the ASCII/two-line banner rule and its `json.dumps`-escaping rationale, the reworded context text (claims only what the hook DID — a hook cannot observe whether the host rendered the field), and three new gotchas (non-rendering hosts still spend the marker; the `tm-` marker prefix vs the command-namespace guard, excluded by NAME not by preceding character). **hooks-system** edit: SessionStart now documented as emitting a top-level `systemMessage` alongside `additionalContext`, with the update-announcement responsibility in its ordered list. **index** edit: hybrid delivery named in the page's hook.
+
+## [2026-08-07] create | update-notice + state-files row — plugin update notification (m-plugin-update-changelog)
+
+New entity page for the update-notification mechanism shipped in 0.4.5: `build_update_notice in update_notice.py` (importable pure-logic module, hook_utils precedent), session-start wiring (fail-open, single-JSON-emit contract), marker semantics (`tm-last-seen-version.json`, PLUGIN_DATA primary / `.claude/state` fallback, persistent-not-per-session — the deliberate opposite of the migration flags), the CI changelog gate in `check_release_integrity.py`, changelog-sourced release notes via `extract_changelog_notes.py`, and four gotchas (file-order trust, triplicated heading grammar, fence non-exclusion, benign marker race). **state-files** edit: fallback-marker row added to the File Catalog. Indexed under Entities.
+
+## [2026-08-06] update | specialized-agents + index — public five-role-group team framing (l-gstack-role-framing)
+
+The wave-1 role-framing task (brainstorm block J) added a team-style presentation of the agents to the user-facing docs: README `## The team` (compact role bullets + link), `docs/USAGE_GUIDE.md` `## The Agent Team` (full 17-agent roster in five role groups with one-line role descriptions), and a regrouped CLAUDE.tm.md `Using Specialized Agents` list (same 13 user-dispatched agents, continuous numbering under role headings, closing paragraph naming auto-dispatched + external teammates). **specialized-agents** edit: new "Public role framing" section documenting the five groups, the three carriers, and the hand-maintained-count gotcha. **index** edit: the Specialized Agents summary line's stale "15 shipped subagents" corrected to 17 (the page body already said 17) and the role framing added to its hook.
+
+## [2026-08-06] create | behavior-rules-contract — gstack behavioral rules across five guidance carriers (m-gstack-behavior-rules)
+
+New entity page for the wave-1 behavioral-rules adoption (brainstorm block C): User Sovereignty + the User Challenge decision class in `receiving-feedback.md` under the 400-word runtime budget (397 after enumerated trims — 3 words of headroom as a forcing function), three rationalization rows in `debugging.md`, the byte-identical question-grounding block (Evidence grounding / Re-grounding after pauses / Dual-scale effort estimates) inside `### Question Discipline` of both `task-investigation.md` and `brainstorm-discussion.md`, the selective Forcing Questions subsection (brainstorm only), and CLAUDE.tm.md's Session Hygiene + shipped-protocols-only decision tree (5 of ≤10 budgeted non-blank lines; template↔root byte-sync). Documents the drift guard's mechanics (`test_behavior_rules_drift.py`: section-bounded containment via `_question_discipline_section`, contiguous-block byte-parity, decision-tree destinations validated against protocol-config `name` keys, full-line pin) and three gotchas (Phase-3 protocols must update the tree + test pins when they ship; the "context" wording tension with retro's date rule is scoped-stricter-wins; root `CLAUDE.tm.md` is a tracked deployed copy). Indexed under Entities. Sourced from the m-gstack-behavior-rules diff.
+
 ## [2026-07-27] update | ai-provider-integration — deploy gitignores the generated `.agents/` dir (m-fix-agy-gitignore-agents-dir)
 
 `ensure_agy_readonly_gate_deployed` creates a project-local `.agents/` (gate script + merge-aware `hooks.json`) but never added it to the host project's `.gitignore`, so the plugin-generated gate leaked into the user's `git status`/commits — unlike `.claude/`, which `ensure_claude_dir_gitignored` already ignores. Fix: a new `shared_state.ensure_agents_dir_gitignored(project_root)` (mirror of the `.claude/` helper, minus the `.claude/settings.local.json` legacy-migration branch — `.agents/` has no legacy variants) is called inside `ensure_agy_readonly_gate_deployed` right after `agents_dir.mkdir(...)` (after the None-plugin_root/missing-source guards, before the already-current early-return, so it runs on every deploy incl. no-ops). Idempotent (four covering forms `.agents/`/`/.agents/`/`.agents`/`/.agents`), preserves other lines, best-effort/never-raises. Whole-dir ignore was the user-confirmed scope (mirrors `.claude/`, hides a user's own `.agents/hooks.json` hooks too). **ai-provider-integration** edit: extended the "Enabling agy deploys a file into the project" gotcha with the gitignore behavior + the accepted limitation that `.gitignore` cannot untrack an already-committed `.agents/`. `updated:` → 2026-07-27. Sourced from the m-fix-agy-gitignore-agents-dir diff (`plugin/hooks/shared_state.py`, `test/test_agy_gate_deploy.py`).
@@ -224,3 +252,99 @@ Updated pages/protocols/protocol-task.md (code-review step, Section 5 descriptio
 ## [2026-07-29] update | Completion and Git Flow — archive_task flips status to completed
 
 Updated pages/procedures/completion-and-git-flow.md: new "archive_task — status flip on archive" subsection — archiving now rewrites the task frontmatter to `status: completed` + a paired `completed: YYYY-MM-DD` line via the best-effort `_mark_task_file_completed in protocol_engine.py` helper (whole-line delimiter / top-level-key parsing, never blocks the archive, `status_updated` additive result key, retry branch repairs stale done/ copies). Source: l-fix-archive-task-status-completed. `updated:` → 2026-07-29.
+
+## [2026-07-30] create | Review Output Contract
+
+Created pages/entities/review-output-contract.md: the unified review-agent output contract introduced by h-gstack-review-contract — confidence calibration 1–10 with display rules and the Critical exception (a Critical never leaves the gate-parsed `## 🔴 Critical Issues (N)`), pre-emit quote-gate with the `[REDACTED]` secrets carve-out, AUTO-FIX/ASK advisory classification, FP suppressions, the JSONL findings schema (`fingerprint: "{path}:{line}:{category}"`, reserved `verdict`, `NO FINDINGS` sentinel), load-bearing sentinel-heading invariants across the three parser consumers, the column-0 `#` truncation gotcha, and the v1 stripping-is-convention honesty note. Indexed under Entities.
+
+## [2026-08-01] create | Review Dispatch Gate (+3 page updates)
+
+Created pages/entities/review-dispatch-gate.md for m-gstack-agent-roster: the CR-2 classifier gate — `classify_review_dispatch in protocol_engine.py` diff measurement (`--numstat --no-renames -z` + untracked NUL-delimited verbatim paths, FIFO guard), thresholds ≥50 specialists / >200 red-team with docs/config-only skip, the three fail-enabled `code_review.*_enabled` gates, the §2/§2a orchestrator contract (first-round parallel dispatch, second-echelon red-team with opt-out-wins precedence, add-only re-measurement), project-scoped JSONL telemetry surviving completion, never-blocks invariant + accepted limitations. Updated in the same pass: specialized-agents.md (15→17 catalog: testing-specialist + red-team entries, code-cleanliness promotion), configuration-schema.md (three dispatch-gate keys), review-output-contract.md (new contract carriers in Sibling Agents). Indexed under Entities.
+
+## [2026-08-01] create | Safety Guards (+2 page updates)
+
+Created pages/entities/safety-guards.md for h-gstack-safety-guards: the destructive-Bash-command guard in `check_safety_guard in sessions-enforce.py` — segment-aware classifier (rm r+f, SQL DROP/TRUNCATE, git push --force / reset --hard / checkout-restore `.` / clean -f, kubectl delete, docker rm -f / container alias / system prune), wrapper stripping with per-wrapper value/chdir flag sets, exit-2 block + a nonce state file under the protected state prefix with exact RAW command binding (TTL 600s, single-use), whole-command allowlist, off/warn-destructive-only/warn-all sensitivity, the reflog-recoverable own-branch exception (push refspec/broad-mode/push.default vetting, foreign-repo guards), the fail-closed SC-3 boundary (narrowed to degrade-scan by user decision), and the documented friction-only bypass/FP list. Updated in the same pass: configuration-schema.md (new "Safety guards" key section), index.md (Entities entry). 133-test drift guard noted.
+
+## [2026-08-06] create | retro Protocol (+1 page update)
+
+Created pages/protocols/protocol-retro.md for m-gstack-retro-protocol: the 7th shipped protocol — 4-step branchless team retrospective (data-collection → metrics → narrative → snapshot) built on `RetroMixin in retro.py`. Covers the per-run `r-retro-<date>` identity model with engine-supplied UTC dates and the `retro_window_days` frontmatter channel, the stale-anchor guard with recoverable (window-dependent) vs hard block classification, the typed cross-task protocol-log reader as an injection boundary (typed fields only, bounded payload, totals before caps), deterministic v1 metrics (45-min sessions, touch-based focus score, LOC bucket weights, 5+ hotspots), the forgery-resistant NUL-record-separator harvest, and the D2 post-write credential-filter pass + strict typed previous-snapshot read (filename-date calendar validation). Updated in the same pass: workflow-protocols.md (hub 6→7, catalog row, family gotchas for the non-dispatcher completion path and branchless identity), index.md (Protocols entry).
+
+## [2026-08-06] fix | Workflow Protocols hub — stale refactoring-gates gotcha
+
+Corrected the family-gotcha bullet claiming refactoring omits `require_spec_review_passed` / `check_completion_evidence` — stale since m-hooks-hygiene-sweep aligned refactoring.json to task's two-stage gate (only `verify_tests_pass` is deliberately omitted). Caught during m-gstack-completion-honesty code review, where the stale claim had propagated into a wrong scope rule; verified against refactoring.json + test_refactoring_gates_drift.py. Detail page protocol-refactoring.md was already correct.
+
+## [2026-08-06] create | Completion Honesty Contract (+4 page updates)
+
+Created pages/entities/completion-honesty-contract.md for m-gstack-completion-honesty: the prompt-level contract making completion claims honest — per-SC Verification Modes (deliverable-keyed) and five statuses with the strict verdict in `spec-compliance-reviewer.md`, the save-on-every-PASS `SPEC_UNVERIFIABLE:` carriage chain (explicit none, legacy carry-list, staleness check) in code-review.md §1, per-item UNVERIFIABLE confirmation before any generic confirmation (§1a five-case fail-closed resolution, 4×4=16 widget batching) and the fail-open prohibitions (§1b + no proceed-without-audit path) in task-completion.md. Updated in the same pass: specialized-agents.md (spec-compliance-reviewer entry + sentinel-staleness gotcha), workflow-protocols.md (two-stage gate stage 1), completion-and-git-flow.md (honesty gates before the dispatch machinery), index.md (Entities entry). 27-test drift guard noted.
+
+## [2026-08-18] update | AI Provider Integration — agy launch fixes
+
+Corrected a wrong claim and recorded the new two-layer permission model
+(m-fix-agy-launch-and-gate).
+
+- **Correction.** The page said agy's `permissions.allow` grants "fail to preempt" the
+  headless soft-deny and are "flaky because they match the literal command string".
+  Both halves are false on agy 1.1.11, verified live: with rules present and no
+  permission flag, agy ran its tools and produced a real review (rc=0). Rules match by
+  command prefix on token boundaries (`command(git)` matches `git add`, not `github`).
+  The claim was likely true of an older build — agy's changelog carries the fix that
+  made headless runs honor settings.json permissions. The neighbouring claim that a
+  PreToolUse hook `decision:"allow"` does NOT lift the soft-deny still holds (retested,
+  including with `permissionOverrides`).
+- **New model.** `--dangerously-skip-permissions` is removed from the invocation
+  (harness security monitors block it). Two layers now: `permissions.allow` says which
+  binaries agy may ATTEMPT; the project-local `.agents/hooks.json` deny-gate decides
+  which invocations are reads.
+- **Gate widened to reality.** It denied `list_dir` (agy's actual tool name), every
+  pipeline, and read-only git subcommands — measured effect was a false "No findings"
+  on a -377-line diff. Pipelines are now validated stage-by-stage; chaining,
+  redirection and command substitution stay denied.
+- **Guard-input layer, round 5.** The page previously described the parser as producing
+  "the arguments the program will see". That was false for shell globs: `shlex` performs
+  quote removal, never pathname expansion, and `*`/`?`/`[` are not metacharacters here,
+  so a glob reached the guards as a literal while the shell turned it into filenames. A
+  filename need not look like an operand — `--pre=sh` is legal — so `rg needle *` in a
+  repo containing one executed `sh` on every file read. The gate now expands globs itself
+  (`_expand_globs`) and validates the expanded argv. Same root cause as rounds 2-4:
+  a gap between the tokens the guard inspects and the argv the program receives.
+  The expansion root is derived from the gate's deployed location, not the process
+  cwd — agy runs the hook from `.agents/` while its commands run one level up, so
+  the obvious default would have made the fix inert in production.
+
+## [2026-10-13] create | Review Loop Convergence, CLAUDE.md Hygiene (+6 page updates)
+- New topics pages for the review-loop design and the CLAUDE.md hygiene gate.
+- Updated review-output-contract (three-level scale), specialized-agents (scale, spec audit last, hashed sentinel), protocol-task, protocol-refactoring, protocol-optimize, protocol-optimize-unattended, optimize-protocols, workflow-protocols and completion-honesty-contract for the new wiring.
+
+## [2026-10-13] update | AI Provider Integration
+- Added the detached-stdin rule for the codex/agy wrapper launches (foreground watchdog branch otherwise blocks on the caller's pipe until the watchdog fires).
+
+## [2026-10-13] update | AI Provider Integration — wait barrier
+- Documented the `Wait for every provider` barrier in the four dispatching sub-protocols and its effect on the agy mutation-check false positive.
+
+## [2026-10-13] update | AI Provider Integration — agy deadline
+- agy deadline raised to `--print-timeout 480s` under a 510s watchdog, wrapper Bash call pinned to `timeout: 600000`, `## Budget` section in every agy phase template, and the agy 1.3.4 exit-0 mid-turn print-timeout signature classified as unavailable.
+- Updated configuration-schema and specialized-agents for the new values.
+
+## [2026-10-13] update | AI Provider Integration, Review Loop Convergence — agy out-of-repository reads
+
+A live run lost agy in code-review rounds 2 and 3: the orchestrator passed the re-review history as a scratchpad path, headless agy denied `read_file` outside its workspace, and the wrapper misreported the denial as missing permission rules. **ai-provider-integration**: new paragraph on the per-tool denial status line, the split §4 rows and Preflight 3. **review-loop-convergence**: history travels inside the prompt; SIMPLE excludes behaviour changes and does not count the covering test as a second file.
+
+## [2026-10-13] update | Completion Honesty Contract, Task Protocol, Refactoring Protocol — DEFERRED documentation criteria
+
+The spec audit runs at the end of code-review, but `task` writes documentation in the next step, so a documentation criterion could never pass the audit; a live run recorded PASS on a promise instead. **completion-honesty-contract**: sixth status `DEFERRED`, the `SPEC_DEFERRED:` carriage note, the documentation-step re-audit and the `require_deferred_criteria_done` gate. **protocol-task**: stage 2 and freshness name the new notes and gate. **protocol-refactoring**: a gotcha claiming refactoring has no `SPEC_REVIEW: PASSED` contradicted the page's own config section and `refactoring.json`; it now says refactoring runs the audit but defers nothing. **index**: "six statuses".
+
+## [2026-10-13] update | Completion Honesty Contract — carriage required, DEFERRED limited to writable files
+
+Review of the same change found two more holes. A carriage note that was never saved passed both gates as if the task predated the feature, so code-review now refuses to exit without a `SPEC_DEFERRED:` note saved after the latest sentinel (a task mid-review at upgrade saves `none`). And DEFERRED could name a `README.rst` that documentation mode cannot edit, or an agent, command or sub-protocol `.md` — behaviour that would then skip every review round — so it is limited to documentation: `CLAUDE.md`, `README*.md`, `CHANGELOG.md`, `wiki/` and `docs/`.
+
+## [2026-10-13] update | Completion Honesty Contract — notes count only in their own step
+
+Review rounds kept finding a note saved in the wrong step that satisfied or cancelled a gate. The gates now read each note only from the step that owns it, taken from the protocol config; the page gained a paragraph on this.
+
+## [2026-10-14] update | retro Protocol — no remote required
+
+The stale-anchor guard no longer blocks a repository without a remote. It only checked that `git remote` printed something and never contacted a remote, so it refused local-only repositories while the data it audits comes from the local default branch. The page's guard section now lists the remaining reasons.
+
+## [2026-10-14] update | retro Protocol — protocol stats cover the window
+
+The typed log reader counted every protocol log ever written, so a weekly retro reported all-time `tasks_completed` / `protocols_started` next to window-scoped commit metrics. It now reads the same window as the git harvest and counts each event by its own timestamp; the page's reader paragraph says how.

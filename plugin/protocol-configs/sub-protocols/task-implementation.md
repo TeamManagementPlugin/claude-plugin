@@ -4,7 +4,7 @@ SCOPE OF THIS STEP: Write code to satisfy all success criteria. Implementation w
 
 ## 0. Launch AI Providers IN PARALLEL (if configured)
 
-**BEFORE you do anything else in this step — read the AI provider state and dispatch any configured providers. They run in parallel with your plan review; their output becomes input to Section 1.**
+**BEFORE you do anything else in this step — read the AI provider state and dispatch any configured providers. Your read-only plan review (Section 1) may proceed while they work; their output is input to it, and no file is edited until they return.**
 
 1. **Read `pre_funcs_results`** from the most recent `protocol_advance` response. Find the entry where `func == "resolve_ai_providers_for_implementation"`. Its `providers` field is the list of configured AI providers (e.g. `[]`, `["codex"]`, or `["codex", "agy"]`); its `instructions` field spells out the exact `subagent_type` and a ready-to-use `prompt` for each.
 2. **If `providers == []` → skip this section entirely.** Empty list means no providers are configured for this phase; proceed directly to Section 1.
@@ -13,6 +13,8 @@ SCOPE OF THIS STEP: Write code to satisfy all success criteria. Implementation w
 **Treat output as advisory.** Providers can hallucinate file paths or invent issues — apply `@knowledge/receiving-feedback.md` (external-reviewer skepticism, file:line verification before action). A finding without a verifiable file:line citation is not actionable; either resolve it to a real file:line by reading the cited area yourself, or drop it.
 
 **Record significant findings** in the task work log under `## AI Provider Input — Implementation`. «Significant» = either a finding you adopted into the implementation plan (becomes a new TodoWrite item or modifies an existing success criterion), or one you explicitly rejected (note why in one line). Boilerplate or empty output may be elided. If a wrapper returns `<provider> review unavailable: …`, note the unavailability one-line and proceed.
+
+**Wait for every provider.** Do not edit any file other than the task work log — tests included — and do not start Section 2 until every dispatched provider has returned — a reply or `<provider> review unavailable: …` — and its findings are recorded above as adopted or rejected. While they run, do only read-only work on the repository. `protocol_save_note`, questions to the user and the provider-input record in an existing task work log stay allowed; if no task work log exists yet, save that record with `protocol_save_note`. A background dispatch does not lift this barrier: wait for each completion notification. A provider that answers after you have acted reviews a plan and a tree that no longer exist, and its input is lost.
 
 **Then continue to Section 1.**
 

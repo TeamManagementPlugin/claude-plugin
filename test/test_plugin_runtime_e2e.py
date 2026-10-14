@@ -17,7 +17,7 @@ What this proves (Layer A) and what it does NOT:
     handshake or Claude's plugin loader (that is Layer B / the report).
   - SC4: provider templates resolve from PLUGIN_ROOT, custom override from
     PROJECT_DIR wins.
-  - SC1/SC2: all 6 protocol configs load from PLUGIN_ROOT and @sub-protocols /
+  - SC1/SC2: all 7 protocol configs load from PLUGIN_ROOT and @sub-protocols /
     @knowledge start-text refs resolve from PLUGIN_ROOT — but NOT a full in-session
     protocol round-trip (Layer B / C).
 
@@ -45,6 +45,7 @@ from test_mcp_tool_inventory import EXPECTED_TOOLS  # noqa: E402
 
 EXPECTED_PROTOCOLS = {
     "task", "brainstorm", "research", "refactoring", "optimize", "optimize-unattended",
+    "retro",
 }
 CUSTOM_SENTINEL = "CUSTOM_OVERRIDE_SENTINEL_XYZ"
 
@@ -105,10 +106,10 @@ def test_all_tools_register_under_plugin_env(probe):
     assert len(registered) == len(EXPECTED_TOOLS) == 42
 
 
-def test_six_protocols_from_plugin_root(probe):
+def test_seven_protocols_from_plugin_root(probe):
     data, _ = probe
     assert set(data["protocol_names"]) == EXPECTED_PROTOCOLS
-    assert len(data["protocol_names"]) == 6
+    assert len(data["protocol_names"]) == 7
     # Every protocol resolved from the plugin install tier (not legacy/custom).
     assert all(src == "system" for src in data["protocol_sources"].values()), data["protocol_sources"]
     assert data["protocol_warnings"] == [], data["protocol_warnings"]

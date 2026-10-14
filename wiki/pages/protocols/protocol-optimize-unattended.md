@@ -2,7 +2,7 @@
 title: optimize-unattended Protocol
 tags: [protocols, daic, git, ai-providers]
 created: 2026-05-31
-updated: 2026-05-31
+updated: 2026-10-13
 sources: [plugin/protocol-configs/optimize-unattended.json, plugin/protocol-configs/sub-protocols/optimize-experimentation-auto.md, plugin/protocol-configs/sub-protocols/optimize-setup.md]
 ---
 
@@ -21,7 +21,7 @@ Steps 1-3 and 5-7 are shared verbatim with the batched protocol:
 - **setup** (`mode: discussion`) — same interactive metric elicitation, same v1 contract, same arg validation, same `write_optimize_setup` as the sole `optimize-state.json` writer. `batch_size` is still elicited but is **inert** here (there's no checkpoint to gate).
 - **metric-script** (`mode: implementation`) — same metric-script contract + double-run stability gate.
 - **baseline** (`mode: implementation`) — same single-run baseline capture + cost projection + unbounded-mode typed acknowledgment.
-- **synthesis** (`mode: documentation`) — same findings document + non-blocking `policy_compliance_audit`.
+- **synthesis** (`mode: documentation`) — same findings document, non-blocking `policy_compliance_audit`, and the blocking `check_claude_md_hygiene` gate.
 - **code-review** (`mode: implementation`) — same full two-stage gate (`SPEC_REVIEW: PASSED` sentinel + `verify_tests_pass` + `check_completion_evidence`).
 - **completion** (`mode: discussion`) — same `_completion_optimize` squash-from-`best_commit` + leaderboard MR/PR. The dispatcher routes `optimize` **and** `optimize-unattended` identically (`get_protocol_state().name in ("optimize", "optimize-unattended")`).
 

@@ -23,10 +23,19 @@ The caller's prompt indicates which codex subcommand to use. Use this lookup:
 
 | Caller asks for                      | Codex command                                                          |
 |--------------------------------------|------------------------------------------------------------------------|
-| code review of uncommitted changes   | `codex review --uncommitted` (review's own sandbox — no `-s` needed)   |
-| any analytical / exploratory task    | `codex exec -s read-only --skip-git-repo-check`                        |
+| a code review                        | `codex review "$PROMPT"` (review's own sandbox — no `-s` needed)       |
+| any analytical / exploratory task    | `codex exec -s read-only --skip-git-repo-check "$PROMPT"`              |
 
-For variants of `codex review` (`--base <branch>`, `--commit <sha>`, custom focus instructions) follow what the caller asked for verbatim.
+**A prompt and a scope flag are mutually exclusive — this is the single most important rule in this file.** `codex review` accepts EITHER a positional `[PROMPT]` OR one of `--uncommitted` / `--base <branch>` / `--commit <sha>`, never both:
+
+```
+$ codex review --uncommitted "focus on bugs"
+error: the argument '--uncommitted' cannot be used with '[PROMPT]'
+```
+
+That is an exit-2 argument-parse failure, identical for `--base` and `--commit` (verified on codex-cli 0.145.0 and 0.147.0). So whenever the caller hands you a prompt — which is always, this is a pass-through wrapper — pass it as the positional argument and add NO scope flag. `codex review` already defaults to reviewing the working-tree diff (it runs `git status` / `git diff` itself), so the flag supplies nothing the prompt cannot say in words, and the caller's prompt states the scope it wants.
+
+Never "resolve" the conflict by dropping the prompt and keeping the flag. Codex would then review to its own default brief while the caller believes it answered their question, and nothing would error — a silent wrong answer, which is worse than a failed one. Use a scope flag ONLY if the caller sends no prompt at all.
 
 ---
 
@@ -34,13 +43,16 @@ For variants of `codex review` (`--base <branch>`, `--commit <sha>`, custom focu
 
 macOS without `coreutils` has no `timeout` binary. Detect gracefully then branch — the empty-`$TIMEOUT_CMD` path MUST invoke `codex` directly (writing `$TIMEOUT_CMD --kill-after=10s 300s codex ...` would expand to `--kill-after=10s 300s codex ...`, and the shell would try to execute `--kill-after=10s` as a command, breaking the wrapper before codex runs).
 
-**SEC-003 — scrub the environment.** Run `codex` itself under `env -i PATH="$PATH" HOME="$HOME"` so plugin `userConfig` secrets exported to this subprocess as `CLAUDE_PLUGIN_OPTION_*` (the user's gitlab/jira/github/telegram tokens) are NOT inherited by the provider CLI. `PATH` keeps the `codex` binary findable; `HOME` keeps codex's own auth (`~/.codex`) reachable. The scrub wraps ONLY the `codex` process — `TIMEOUT_CMD`, `mktemp`, `cat`, and the trap run in the full shell env.
+**SEC-003 — scrub the environment.** Run `codex` itself under `env -i PATH="$PATH" HOME="$HOME" TMPDIR="${TMPDIR:-/tmp}"` so plugin `userConfig` secrets exported to this subprocess as `CLAUDE_PLUGIN_OPTION_*` (the user's gitlab/jira/github/telegram tokens) are NOT inherited by the provider CLI. `PATH` keeps the `codex` binary findable; `HOME` keeps codex's own auth (`~/.codex`) reachable; `TMPDIR` keeps a writable temp directory reachable — `env -i` otherwise leaves the CLI with none, and codex's read-only sandbox denies `/tmp` while permitting the real per-user `$TMPDIR` under `/var/folders/`, so tools codex spawns die with `No usable temporary directory found`. The inherited value is what fixes it; `:-/tmp` is only a last resort for hosts where the var is genuinely unset. A temp path is not a secret, so passing it through does not weaken the scrub, whose purpose is keeping provider TOKENS out. The scrub wraps ONLY the `codex` process — `TIMEOUT_CMD`, `mktemp`, `cat`, and the trap run in the full shell env.
+
+
+**Detach stdin.** Every `codex` launch ends with `</dev/null`: stdin is never inherited. The Bash tool hands the wrapper an open pipe that never reaches EOF, and codex reads a non-TTY stdin, so a foreground `codex exec` blocks on it until the watchdog kills the run. The prompt always travels as an argument, so codex needs nothing on stdin. The background branch would get `/dev/null` implicitly; the redirect is written there too so no branch depends on that.
 
 ```bash
 TIMEOUT_CMD=$(command -v gtimeout || command -v timeout || echo "")
 
 if [ -n "$TIMEOUT_CMD" ]; then
-  "$TIMEOUT_CMD" --kill-after=10s 300s env -i PATH="$PATH" HOME="$HOME" codex <subcommand> ... 2>&1
+  "$TIMEOUT_CMD" --kill-after=10s 300s env -i PATH="$PATH" HOME="$HOME" TMPDIR="${TMPDIR:-/tmp}" codex <subcommand> ... </dev/null 2>&1
 else
   # No gtimeout/timeout on PATH (stock macOS): shell-native watchdog.
   # codex has NO internal deadline, so without this backstop it runs unbounded
@@ -49,7 +61,7 @@ else
   # loses direct stdout); a detached (sleep 300; kill) subshell is the backstop.
   CODEX_OUT=$(mktemp)
   trap 'rm -f "$CODEX_OUT"' EXIT
-  env -i PATH="$PATH" HOME="$HOME" codex <subcommand> ... >"$CODEX_OUT" 2>&1 &
+  env -i PATH="$PATH" HOME="$HOME" TMPDIR="${TMPDIR:-/tmp}" codex <subcommand> ... </dev/null >"$CODEX_OUT" 2>&1 &
   CODEX_PID=$!
   # stdio detached (>/dev/null 2>&1): an orphaned `sleep` holding the script's
   # output pipe can stall harnesses that wait for EOF.
@@ -92,18 +104,18 @@ cat > "$SCHEMA" <<'SCHEMA_EOF'
 SCHEMA_EOF
 
 if [ -n "$TIMEOUT_CMD" ]; then
-  "$TIMEOUT_CMD" --kill-after=10s 300s env -i PATH="$PATH" HOME="$HOME" codex exec -s read-only --skip-git-repo-check \
+  "$TIMEOUT_CMD" --kill-after=10s 300s env -i PATH="$PATH" HOME="$HOME" TMPDIR="${TMPDIR:-/tmp}" codex exec -s read-only --skip-git-repo-check \
     --output-schema "$SCHEMA" \
-    "$PROMPT" 2>&1
+    "$PROMPT" </dev/null 2>&1
 else
   # Shell-native watchdog (no gtimeout/timeout on PATH). Combined EXIT trap:
   # a 2nd `trap ... EXIT` REPLACES the earlier `trap 'rm -f "$SCHEMA"' EXIT`,
   # so it must clean up BOTH tmpfiles. Both vars are set in this branch.
   CODEX_OUT=$(mktemp)
   trap 'rm -f "$SCHEMA" "$CODEX_OUT"' EXIT
-  env -i PATH="$PATH" HOME="$HOME" codex exec -s read-only --skip-git-repo-check \
+  env -i PATH="$PATH" HOME="$HOME" TMPDIR="${TMPDIR:-/tmp}" codex exec -s read-only --skip-git-repo-check \
     --output-schema "$SCHEMA" \
-    "$PROMPT" >"$CODEX_OUT" 2>&1 &
+    "$PROMPT" </dev/null >"$CODEX_OUT" 2>&1 &
   CODEX_PID=$!
   ( sleep 300; kill "$CODEX_PID" 2>/dev/null ) >/dev/null 2>&1 &
   WATCHDOG_PID=$!
@@ -155,7 +167,7 @@ The caller treats this as a non-blocking failure — do not raise, do not retry,
 ## 5. Boundaries
 
 - **Read-only.** Always `-s read-only` for `codex exec`. Never invoke `codex apply`, `codex login`, `codex logout`, or any subcommand that mutates state.
-- **Scrubbed env (SEC-003).** Always run `codex` under `env -i PATH="$PATH" HOME="$HOME"` so plugin `userConfig` tokens (`CLAUDE_PLUGIN_OPTION_*`) are not inherited by the provider CLI. Keep the scrub on the `codex` process only.
+- **Scrubbed env (SEC-003).** Always run `codex` under `env -i PATH="$PATH" HOME="$HOME" TMPDIR="${TMPDIR:-/tmp}"` so plugin `userConfig` tokens (`CLAUDE_PLUGIN_OPTION_*`) are not inherited by the provider CLI. Keep the scrub on the `codex` process only.
 - **One invocation per run.** If the caller wants a re-review, they will spawn the agent again.
 - **Single foreground Bash call.** Run the whole wrapper snippet as ONE foreground Bash call and let it finish. The watchdog inside the snippet already backgrounds `codex` and kills it on the deadline — that internal `&` is expected and required. What you must NOT do is wrap the *entire* invocation in your own background job and poll it from a later Bash call (e.g. via `BashOutput`); that runs OUTSIDE the in-snippet watchdog and can run for many minutes before it is force-killed.
 - **Stay terse.** Return only codex's output (or the `unavailable:` line). No commentary, no progress narration.

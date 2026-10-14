@@ -65,6 +65,18 @@ On **Windows**, `/team-management:init` is required, not optional — it provisi
 
 Other protocols cover the rest of the work — `research`, `brainstorm`, `refactoring`, and metric-driven `optimize`. Claude picks the fit and explains why before starting.
 
+## The team
+
+The protocols dispatch specialized subagents — a team with recognizable roles, each working in its own context window:
+
+- **Investigation & design** — a codebase guide, a systems architect, a delivery planner.
+- **Challenge & risk** — a devil's advocate, a user advocate, a security officer.
+- **Quality assurance** — a lead reviewer, a spec auditor, a test-quality engineer, a second-echelon red team, a maintainability reviewer.
+- **Knowledge & records** — an onboarding researcher, a context keeper, a scribe, a documentation engineer.
+- **External reviewers** — OpenAI Codex and Google Antigravity as independent second opinions, when you enable them.
+
+Full roster with agent names: [usage guide](docs/USAGE_GUIDE.md#the-agent-team).
+
 ## Features
 
 - **DAIC enforcement** — discussion-before-implementation, enforced by hooks in the runtime.

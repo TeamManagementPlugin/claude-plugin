@@ -2,13 +2,13 @@
 title: Completion and Git Flow
 tags: [git, issue-tracking, protocols]
 created: 2026-05-31
-updated: 2026-07-29
+updated: 2026-08-06
 sources: [plugin/hooks/optimize_completion.py, plugin/hooks/protocol_engine.py, plugin/protocol-configs/sub-protocols/task-completion.md, plugin/hooks/git_operations.py, plugin/mcp/tools/git_operations.py]
 ---
 
 # Completion and Git Flow
 
-The completion step is the last step of any protocol that ends in git work (`task`, `brainstorm` planning, `refactoring`, `optimize`, `optimize-unattended`). Instead of a fixed straight-line chain of git/issue post_funcs, every such step now wires `pre_funcs: [present_completion_options]` and `post_funcs: [require_discard_confirmation, completion_dispatch]`. The dispatcher branches on `issue_tracking.provider` so that GitLab/GitHub/Jira users keep the exact pre-dispatcher automation, while users with no issue tracker get a 4-option menu (`merge_local` / `push_pr` / `keep` / `discard`). All of the dispatch logic lives in the `OptimizeCompletionMixin` in `plugin/hooks/optimize_completion.py` (composed into `ProtocolEngine`). The two MCP tools in `plugin/mcp/tools/git_operations.py` (`git_commit`, `git_push`) and the shared helpers in `plugin/hooks/git_operations.py` are *operator-facing* git utilities, not part of the automated chain — see [Issue Tracking Providers](pages/subsystems/issue-tracking-providers.md) for the provider-side MR/PR creation tools.
+The completion step is the last step of any protocol that ends in git work (`task`, `brainstorm` planning, `refactoring`, `optimize`, `optimize-unattended`). Before any of the engine machinery below runs, the `task-completion.md` sub-protocol imposes two prompt-level honesty gates: per-item user confirmation of UNVERIFIABLE spec-review items (§1a — before any generic "LGTM", resolved through a fail-closed five-case carriage chain) and the fail-open prohibition (§1b — an audit that could not run is never treated as passed); see [Completion Honesty Contract](pages/entities/completion-honesty-contract.md). Instead of a fixed straight-line chain of git/issue post_funcs, every such step now wires `pre_funcs: [present_completion_options]` and `post_funcs: [require_discard_confirmation, completion_dispatch]`. The dispatcher branches on `issue_tracking.provider` so that GitLab/GitHub/Jira users keep the exact pre-dispatcher automation, while users with no issue tracker get a 4-option menu (`merge_local` / `push_pr` / `keep` / `discard`). All of the dispatch logic lives in the `OptimizeCompletionMixin` in `plugin/hooks/optimize_completion.py` (composed into `ProtocolEngine`). The two MCP tools in `plugin/mcp/tools/git_operations.py` (`git_commit`, `git_push`) and the shared helpers in `plugin/hooks/git_operations.py` are *operator-facing* git utilities, not part of the automated chain — see [Issue Tracking Providers](pages/subsystems/issue-tracking-providers.md) for the provider-side MR/PR creation tools.
 
 ## Mechanics
 

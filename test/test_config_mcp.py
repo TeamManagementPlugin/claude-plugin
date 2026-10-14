@@ -908,3 +908,116 @@ def test_telegram_bot_token_still_rejected_but_chat_id_ok(proj):
         {"notifications.channels.telegram.chat_id": "999"})
     assert out2["success"] is True, out2
     assert _read_config(root)["notifications"]["channels"]["telegram"]["chat_id"] == "999"
+
+
+# --------------------------------------------------------------------------
+# agy global permission rules — the write must be REPORTED, never silent
+# (code-review round 5, W2)
+# --------------------------------------------------------------------------
+
+def test_agy_rules_write_is_reported_in_the_result(proj, monkeypatch):
+    """The write lands in agy's GLOBAL per-user settings, outside the project, and it
+    can fire on a call that never entered the AI-providers section (the second
+    disjunct fires whenever the rules are missing). The flow can only disclose what
+    the result tells it, so `agy_permission_rules` must say when a write happened.
+
+    `ensure_agy_permission_rules` is patched: unpatched it would write the developer's
+    real ~/.gemini/antigravity-cli/settings.json, since the call site takes the
+    default home.
+    """
+    root, mcp = proj
+    _write_config(root, {"ai_providers": {"enabled_providers": ["agy"]},
+                         "agy": {"enabled": True}})
+    calls = []
+
+    def _writer(*a, **k):
+        calls.append(1)
+        return True          # the writer's contract: True ONLY when it wrote
+
+    monkeypatch.setattr(shared_state, "ensure_agy_permission_rules", _writer)
+    monkeypatch.setattr(shared_state, "agy_permission_rules_present", lambda *a, **k: False)
+    monkeypatch.setattr(shared_state, "ensure_agy_readonly_gate_deployed", lambda *a, **k: True)
+    shared_state.write_config_session_flag()
+
+    # An edit that touches NOTHING agy-related still reaches the write, because the
+    # rules are missing — exactly the case whose disclosure the flow could skip.
+    out = mcp.tools["config_update"]({"developer_name": "Max"})
+    assert out["success"] is True
+    assert len(calls) == 1
+    assert out["agy_permission_rules"] == "written"
+
+
+def test_agy_rules_bail_out_is_not_reported_as_written(proj, monkeypatch):
+    """The writer returns False when it leaves the file alone — most importantly on a
+    MALFORMED settings.json, where it bails with a stderr breadcrumb the user never
+    sees. Reporting that as "written" tells the user their rules were added while agy
+    keeps returning empty reviews (round 6, F1).
+
+    The earlier version of the test above returned `None` from its stub and asserted
+    "written" regardless, so it pinned the bug as the contract and went RED against a
+    correct implementation — the same shape as the round-5 Critical's test.
+    """
+    root, mcp = proj
+    _write_config(root, {"ai_providers": {"enabled_providers": ["agy"]},
+                         "agy": {"enabled": True}})
+    calls = []
+
+    def _bailing_writer(*a, **k):
+        calls.append(1)
+        return False         # malformed settings.json: touched nothing
+
+    monkeypatch.setattr(shared_state, "ensure_agy_permission_rules", _bailing_writer)
+    monkeypatch.setattr(shared_state, "agy_permission_rules_present", lambda *a, **k: False)
+    monkeypatch.setattr(shared_state, "ensure_agy_readonly_gate_deployed", lambda *a, **k: True)
+    shared_state.write_config_session_flag()
+
+    out = mcp.tools["config_update"]({"developer_name": "Max"})
+    assert out["success"] is True
+    assert calls == [1], "the writer must still be attempted"
+    assert out["agy_permission_rules"] == "unchanged"
+
+
+def test_agy_rules_unchanged_is_reported_when_nothing_is_written(proj, monkeypatch):
+    root, mcp = proj
+    _write_config(root, {"ai_providers": {"enabled_providers": ["agy"]},
+                         "agy": {"enabled": True}})
+    calls = []
+    monkeypatch.setattr(shared_state, "ensure_agy_permission_rules",
+                        lambda *a, **k: calls.append(1))
+    monkeypatch.setattr(shared_state, "agy_permission_rules_present", lambda *a, **k: True)
+    monkeypatch.setattr(shared_state, "ensure_agy_readonly_gate_deployed", lambda *a, **k: True)
+    shared_state.write_config_session_flag()
+
+    out = mcp.tools["config_update"]({"developer_name": "Max"})
+    assert out["success"] is True
+    assert calls == []
+    assert out["agy_permission_rules"] == "unchanged"
+
+
+def test_agy_rules_unchanged_when_agy_is_disabled(proj, monkeypatch):
+    root, mcp = proj
+    _write_config(root, {"developer_name": "old"})
+    calls = []
+    monkeypatch.setattr(shared_state, "ensure_agy_permission_rules",
+                        lambda *a, **k: calls.append(1))
+    shared_state.write_config_session_flag()
+
+    out = mcp.tools["config_update"]({"developer_name": "Max"})
+    assert out["success"] is True
+    assert calls == []
+    assert out["agy_permission_rules"] == "unchanged"
+
+
+def test_config_md_discloses_the_global_write_before_the_sections():
+    """The disclosure must not be reachable only through the AI-providers section —
+    a user editing an unrelated key can trigger the write."""
+    md = (Path(__file__).parent.parent / "plugin" / "commands" / "config.md").read_text(encoding="utf-8")
+    marker = "**Walk the sections in order**"
+    # Without this, renaming the heading makes `split` return the whole document and
+    # every assertion below is satisfied by the AI-providers section — the exact
+    # placement this test forbids. A routine prompt edit would disarm it (round 6, F5).
+    assert marker in md, "section marker renamed; this guard would pass vacuously"
+    before_sections = md.split(marker)[0]
+    assert "agy" in before_sections
+    assert "agy_permission_rules" in before_sections
+    assert "~/.gemini/antigravity-cli/settings.json" in before_sections

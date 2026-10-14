@@ -1426,6 +1426,27 @@ class TestPolicyComplianceAudit(FuncTestBase):
         self.assertTrue(result["success"])
         self.assertIn("nothing to audit", result.get("skipped", ""))
 
+    def test_decode_failure_never_blocks(self):
+        # synthesis runs this audit under post_funcs_stop_on_failure: true, so
+        # an exception here would block the step the audit promises never to block.
+        self._write_optimize_state(frozen_paths=[])
+        boom = UnicodeDecodeError("utf-8", b"\xe9", 0, 1, "invalid continuation byte")
+        with patch("protocol_engine.subprocess.run", side_effect=boom):
+            result = self.engine._func_policy_compliance_audit()
+        self.assertTrue(result["success"])
+        self.assertIn("skipped", result)
+
+    def test_git_output_decoded_leniently(self):
+        self._write_optimize_state(frozen_paths=[])
+        with patch("protocol_engine.subprocess.run", side_effect=[
+            self._git_log_response(""),
+            self._git_log_response(""),
+        ]) as run:
+            self.engine._func_policy_compliance_audit()
+        for call in run.call_args_list:
+            self.assertEqual(call.kwargs.get("encoding"), "utf-8")
+            self.assertEqual(call.kwargs.get("errors"), "replace")
+
     def test_frozen_path_modified_flagged(self):
         self._write_optimize_state(frozen_paths=["src/sacred.py"])
         # git log --name-only --pretty=format:%H base..HEAD
@@ -2224,15 +2245,16 @@ class _AIProviderPhaseTestMixin:
         with self.assertRaises(ValueError):
             self._pre_func()
 
-    def test_agy_missing_skip_permissions_raises_on_drift(self):
-        """If a custom agy template omits `--dangerously-skip-permissions`, the
-        assertion fires (headless agy soft-denies commands without it)."""
+    def test_agy_skip_permissions_flag_raises_on_drift(self):
+        """If a custom agy template still carries `--dangerously-skip-permissions`,
+        the check fires: harness security monitors block that invocation, so a
+        stale template turns every agy dispatch into a silent no-review."""
         from protocol_engine import _PHASE_REGISTRY
         entry = _PHASE_REGISTRY[self.PHASE_KEY]
         custom_path = (self.temp_dir / "team-management" / "protocol-configs"
                        / "custom" / "providers" / f"agy-{entry['template_subpath']}.md")
         custom_path.write_text(
-            "Bogus agy prompt without the read-only flag (test of assertion).",
+            "Run `agy --dangerously-skip-permissions -p ...` (stale template).",
             encoding="utf-8",
         )
         self._write_config(enabled_providers=["agy"], codex_enabled=False)
@@ -2257,18 +2279,29 @@ class _AIProviderPhaseTestMixin:
             self._pre_func()
 
     def test_agy_inline_default_passes_readonly_assertion(self):
-        """With NO agy template on disk anywhere, the inline default template
-        must carry `--dangerously-skip-permissions` and NOT `--sandbox` so the
-        assertion does not fire and the pre_func succeeds (cold-start /
-        missing-template degradation)."""
+        """With NO agy template on disk anywhere, the inline default must carry
+        NEITHER `--dangerously-skip-permissions` NOR `--sandbox`, so the check does
+        not fire and the pre_func succeeds (cold-start / missing-template
+        degradation)."""
         # The temp project root has no template dirs at all — the 3-tier disk
         # lookup misses and the inline default is used.
         self._write_config(enabled_providers=["agy"], codex_enabled=False)
         result = self._pre_func()
         self.assertTrue(result["success"])
         self.assertEqual(result["providers"], ["agy"])
-        self.assertIn("--dangerously-skip-permissions", result["instructions"])
+        self.assertNotIn("--dangerously-skip-permissions", result["instructions"])
         self.assertNotIn("agy with `--sandbox`", result["instructions"])
+
+    def test_agy_instruction_surfaces_permission_rules_message(self):
+        """The wrapper's `permission rules not configured` reply must reach the USER.
+
+        Swallowed as a generic non-blocking failure it is invisible, and agy then
+        contributes nothing to every future review while the step still reports
+        success — the same silent-degradation shape this task exists to remove."""
+        self._write_config(enabled_providers=["agy"], codex_enabled=False)
+        result = self._pre_func()
+        self.assertIn("permission rules not configured", result["instructions"])
+        self.assertIn("VERBATIM", result["instructions"])
 
 
 class CredentialFilterTest(TestCase):
@@ -2466,18 +2499,20 @@ class SandboxFlagEnforcementTest(TestCase):
             self.check(
                 enabled=["codex"], subcommand="exec",
                 codex_task="codex exec without the flag",
-                agy_task="agy --dangerously-skip-permissions -p x",
+                agy_task="agy -p x",
                 func_name="resolve_ai_providers_for_investigation",
                 phase="task investigation",
             )
         self.assertIn("-s read-only", str(ctx.exception))
 
-    def test_agy_missing_skip_permissions_raises(self):
+    def test_agy_skip_permissions_flag_raises(self):
+        """The flag is now FORBIDDEN, not required: harness security monitors block
+        the invocation, and settings.json permission rules replace it."""
         with self.assertRaises(ValueError) as ctx:
             self.check(
                 enabled=["agy"], subcommand="exec",
                 codex_task="codex exec -s read-only -p x",
-                agy_task="agy without the flag",
+                agy_task="agy --dangerously-skip-permissions -p x",
                 func_name="resolve_ai_providers_for_investigation",
                 phase="task investigation",
             )
@@ -2490,7 +2525,7 @@ class SandboxFlagEnforcementTest(TestCase):
             self.check(
                 enabled=["agy"], subcommand="exec",
                 codex_task="codex exec -s read-only -p x",
-                agy_task="agy --sandbox --dangerously-skip-permissions -p x",
+                agy_task="agy --sandbox -p x",
                 func_name="resolve_ai_providers_for_investigation",
                 phase="task investigation",
             )
@@ -2500,16 +2535,93 @@ class SandboxFlagEnforcementTest(TestCase):
         self.check(
             enabled=["codex", "agy"], subcommand="exec",
             codex_task="codex exec -s read-only -p x",
-            agy_task="agy --dangerously-skip-permissions -p x",
+            agy_task="agy -p x",
             func_name="f", phase="p",
         )
 
     def test_codex_review_subcommand_skips_codex_check(self):
-        """`codex review` has its own sandbox — no `-s read-only` required."""
+        """`codex review` has its own sandbox — no `-s read-only` required.
+
+        The prompt-bearing form is the ONLY correct review invocation: the
+        wrapper passes the caller's prompt as `codex review "$PROMPT"`.
+        """
         self.check(
             enabled=["codex"], subcommand="review",
-            codex_task="codex review --uncommitted",
-            agy_task="agy --dangerously-skip-permissions -p x",
+            codex_task='Run `codex review "..."` and focus on error handling.',
+            agy_task="agy -p x",
+            func_name="f", phase="p",
+        )
+
+    def test_codex_review_rejects_uncommitted_with_prompt(self):
+        """`--uncommitted` is mutually exclusive with a caller prompt.
+
+        `codex review --uncommitted "<prompt>"` exits 2 with
+        "the argument '--uncommitted' cannot be used with '[PROMPT]'"
+        (verified on codex-cli 0.145.0 and 0.147.0), so the wrapper drops the
+        prompt and reviews to codex's own default brief instead — silently.
+        The review branch of the check used to skip ALL codex validation, which
+        is how the shipped prompt carried the flag for so long.
+        """
+        with self.assertRaises(ValueError) as ctx:
+            self.check(
+                enabled=["codex"], subcommand="review",
+                codex_task="Run `codex review --uncommitted`. Focus on bugs.",
+                agy_task="agy -p x",
+                func_name="resolve_ai_providers", phase="code review",
+            )
+        self.assertIn("--uncommitted", str(ctx.exception))
+
+    def test_codex_review_rejects_every_scope_flag(self):
+        """`--base` and `--commit` carry the same exclusion as `--uncommitted`
+        (`the argument '--base <BRANCH>' cannot be used with '[PROMPT]'`,
+        verified on codex-cli 0.147.0), so the check covers all three rather
+        than the one that happened to ship in the defective prompt."""
+        from ai_providers import _CODEX_REVIEW_SCOPE_FLAGS
+        self.assertEqual(
+            set(_CODEX_REVIEW_SCOPE_FLAGS), {"--uncommitted", "--base", "--commit"})
+        for flag in _CODEX_REVIEW_SCOPE_FLAGS:
+            with self.subTest(flag=flag):
+                with self.assertRaises(ValueError) as ctx:
+                    self.check(
+                        enabled=["codex"], subcommand="review",
+                        codex_task=f"Run `codex review {flag} whatever`. Focus on bugs.",
+                        agy_task="agy -p x",
+                        func_name="resolve_ai_providers", phase="code review",
+                    )
+                self.assertIn(flag, str(ctx.exception))
+
+    def test_scope_flag_prefixes_do_not_false_positive(self):
+        """Whole-token match: `--base` is a prefix of `--baseline` and `--commit`
+        of `--commit-msg`. A template DISCUSSING such an option carries no scope
+        flag, and the check is fail-closed — a false positive costs a whole
+        step's provider dispatch."""
+        for benign in ("--baseline", "--commit-msg", "--base64", "--commitment",
+                       "--uncommittedly"):
+            with self.subTest(token=benign):
+                self.check(
+                    enabled=["codex"], subcommand="review",
+                    codex_task=f'Run `codex review "..."`. Note: {benign} is unrelated.',
+                    agy_task="agy -p x",
+                    func_name="f", phase="p",
+                )
+
+    def test_equals_spelling_of_a_scope_flag_still_raises(self):
+        """`--base=main` is a real use, so the token boundary must not exempt it."""
+        with self.assertRaises(ValueError):
+            self.check(
+                enabled=["codex"], subcommand="review",
+                codex_task="Run `codex review --base=main`.",
+                agy_task="agy -p x",
+                func_name="f", phase="p",
+            )
+
+    def test_codex_review_uncommitted_ignored_when_codex_disabled(self):
+        """The check is codex-gated: a review prompt is not examined at all
+        when codex is not among the enabled providers."""
+        self.check(
+            enabled=["agy"], subcommand="review",
+            codex_task="Run `codex review --uncommitted`.",
+            agy_task="agy -p x",
             func_name="f", phase="p",
         )
 
@@ -2522,7 +2634,8 @@ class SandboxFlagEnforcementTest(TestCase):
             "from ai_providers import _ensure_sandbox_flags\n"
             "try:\n"
             "    _ensure_sandbox_flags(enabled=['agy'], subcommand='exec',\n"
-            "                          codex_task='', agy_task='no flag',\n"
+            "                          codex_task='',\n"
+            "                          agy_task='agy --dangerously-skip-permissions -p x',\n"
             "                          func_name='f', phase='p')\n"
             "except ValueError:\n"
             "    sys.exit(42)\n"
@@ -2533,6 +2646,487 @@ class SandboxFlagEnforcementTest(TestCase):
             capture_output=True, text=True, timeout=60,
         )
         self.assertEqual(result.returncode, 42, result.stderr)
+
+
+class ChangedFilesCollectionTest(TestCase):
+    """`_collect_changed_files` — the {changed_files} context var behind the
+    code-review provider templates.
+
+    The value replaces the literal `<list>` placeholder the inline code-review
+    prompt used to carry: `_func_resolve_ai_providers` was the only phase
+    resolver that bypassed `_resolve_ai_providers_via_registry`, so
+    `_build_provider_context_vars` never ran for it and nothing was substituted.
+    """
+
+    def setUp(self):
+        self.temp_dir = Path(tempfile.mkdtemp())
+        from protocol_engine import ProtocolEngine
+        self.engine = ProtocolEngine(self.temp_dir)
+
+    def tearDown(self):
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def _git(self, *args):
+        subprocess.run(["git", *args], cwd=str(self.temp_dir), check=True,
+                       capture_output=True, text=True)
+
+    def _init_repo(self):
+        self._git("init", "-q", "-b", "main")
+        self._git("config", "user.email", "t@example.com")
+        self._git("config", "user.name", "T")
+        (self.temp_dir / "tracked.py").write_text("original\n", encoding="utf-8")
+        self._git("add", "tracked.py")
+        self._git("commit", "-qm", "init")
+
+    @staticmethod
+    def _path_lines(out):
+        """Count rendered path lines.
+
+        Counted by line prefix, not by substring: the fence's own `----- BEGIN`
+        / `----- END` rules contain `- ` and would inflate a naive count.
+        """
+        return sum(1 for line in out.splitlines() if line.startswith("- "))
+
+    def _fake_git(self, stdout, returncode=0):
+        """Patch context returning a canned `git status --porcelain -z` stdout."""
+        proc = MagicMock()
+        proc.returncode = returncode
+        proc.stdout = stdout
+        return patch("ai_providers.subprocess.run", return_value=proc)
+
+    def test_review_phase_renders_real_paths(self):
+        """Tracked modifications AND untracked files both reach the prompt."""
+        self._init_repo()
+        (self.temp_dir / "tracked.py").write_text("changed\n", encoding="utf-8")
+        (self.temp_dir / "brand_new.txt").write_text("hi\n", encoding="utf-8")
+
+        out = self.engine._collect_changed_files()
+
+        self.assertIn("tracked.py", out)
+        self.assertIn("brand_new.txt", out)
+        # Wrapped in the untrusted-data fence: filenames are repo-controlled and
+        # land inside a provider prompt.
+        self.assertIn("BEGIN UNTRUSTED TASK CONTENT", out)
+        self.assertIn("END UNTRUSTED TASK CONTENT", out)
+
+    def test_clean_tree_renders_empty(self):
+        """A clean working tree renders the empty string, not an empty fence.
+
+        This is the optimize-protocol case: those protocols reach code-review
+        with everything committed, so the templates must cope with no list.
+        """
+        self._init_repo()
+        self.assertEqual(self.engine._collect_changed_files(), "")
+
+    def test_truncation_marker_names_the_dropped_count(self):
+        """Truncation is never silent — the sub-protocol requires the COMPLETE
+        changed-file set, so a cap that hides paths must say how many."""
+        from ai_providers import _CHANGED_FILES_CAP
+        total = _CHANGED_FILES_CAP + 50
+        stdout = "".join(f" M f{i}.py\0" for i in range(total))
+        with self._fake_git(stdout):
+            out = self.engine._collect_changed_files()
+        self.assertIn("50", out)
+        self.assertIn("not listed", out)
+        self.assertEqual(self._path_lines(out), _CHANGED_FILES_CAP)
+
+    def test_git_failure_degrades_to_empty(self):
+        """A non-zero git exit renders empty and never raises — a provider
+        prompt is advisory; it must not be able to fail a protocol step."""
+        with self._fake_git("", returncode=1):
+            self.assertEqual(self.engine._collect_changed_files(), "")
+
+    def test_git_timeout_degrades_to_empty(self):
+        with patch("ai_providers.subprocess.run",
+                   side_effect=subprocess.TimeoutExpired(cmd="git", timeout=15)):
+            self.assertEqual(self.engine._collect_changed_files(), "")
+
+    def test_missing_git_binary_degrades_to_empty(self):
+        with patch("ai_providers.subprocess.run", side_effect=OSError("no git")):
+            self.assertEqual(self.engine._collect_changed_files(), "")
+
+    def test_rename_record_consumes_the_old_path(self):
+        """`-z` renames emit `XY <new>\\0<old>\\0` — the trailing old path is a
+        continuation of the same record, not a second changed file."""
+        with self._fake_git("R  new_name.py\0old_name.py\0 M other.py\0"):
+            out = self.engine._collect_changed_files()
+        self.assertIn("new_name.py", out)
+        self.assertIn("other.py", out)
+        self.assertNotIn("old_name.py", out)
+
+    def test_control_characters_in_path_are_scrubbed(self):
+        """A path may legally contain a newline on POSIX; `-z` keeps it in one
+        record, and rendering must not let it forge extra list lines."""
+        with self._fake_git(" M we\nird.py\0"):
+            out = self.engine._collect_changed_files()
+        self.assertEqual(self._path_lines(out), 1, out)
+        self.assertIn("we ird.py", out)
+
+    def test_git_invocation_carries_the_boundary_contract(self):
+        """Every part of the git call is load-bearing, so pin it.
+
+        `--untracked-files=all` because an untracked file is part of the diff
+        under review; `-z` so a path with edge whitespace or a newline stays one
+        record; `stdin=DEVNULL` so git can never block on input inside a hook;
+        `errors="replace"` so an undecodable filename byte degrades instead of
+        raising; the timeout so a wedged git cannot hang a protocol step.
+        """
+        from ai_providers import GIT_TIMEOUT_FAST
+        proc = MagicMock()
+        proc.returncode, proc.stdout = 0, ""
+        with patch("ai_providers.subprocess.run", return_value=proc) as run:
+            self.engine._collect_changed_files()
+        argv, kwargs = run.call_args[0][0], run.call_args[1]
+        self.assertEqual(argv[:2], ["git", "status"])
+        self.assertIn("--porcelain", argv)
+        self.assertIn("--untracked-files=all", argv)
+        self.assertIn("-z", argv)
+        self.assertEqual(kwargs["cwd"], str(self.temp_dir))
+        self.assertEqual(kwargs["stdin"], subprocess.DEVNULL)
+        self.assertEqual(kwargs["errors"], "replace")
+        self.assertEqual(kwargs["timeout"], GIT_TIMEOUT_FAST)
+        self.assertFalse(kwargs["check"])
+
+    def test_undecodable_filename_bytes_degrade_to_empty(self):
+        """`text=True` decodes stdout; a raised UnicodeDecodeError is a
+        ValueError, which the earlier `(OSError, SubprocessError)` pair did not
+        catch. `errors="replace"` makes it unreachable in practice — this pins
+        the belt-and-braces path anyway."""
+        boom = UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte")
+        with patch("ai_providers.subprocess.run", side_effect=boom):
+            self.assertEqual(self.engine._collect_changed_files(), "")
+
+    def test_worktree_column_rename_also_consumes_the_old_path(self):
+        """R/C is not exclusive to the index column. Reading only `xy[0]` would
+        leave the original path of a worktree-column rename to be parsed as a
+        status record, mangling it via `rec[3:]` into a phantom entry."""
+        with self._fake_git(" R new_wt.py\0old_wt.py\0 M other.py\0"):
+            out = self.engine._collect_changed_files()
+        self.assertIn("new_wt.py", out)
+        self.assertIn("other.py", out)
+        self.assertNotIn("old_wt.py", out)
+        self.assertEqual(self._path_lines(out), 2, out)
+
+    def test_pem_shaped_filename_cannot_swallow_the_rest_of_the_prompt(self):
+        """A path matching the PEM BEGIN marker must not arm the stateful pass.
+
+        `_filter_credentials` redacts every line from a `-----BEGIN … PRIVATE
+        KEY-----` through the matching END. Such a filename is legal on POSIX
+        and no END line follows it in a path list, so if the block reached the
+        whole-prompt filter unfiltered, everything after it — the closing fence,
+        the job section, the invocation instruction — would be redacted and the
+        provider would review to its own default brief with no error. Filtering
+        inside the collector confines the pass's state to this call.
+        """
+        with self._fake_git(" M fixtures/-----BEGIN RSA PRIVATE KEY-----.pem\0 M after.py\0"):
+            block = self.engine._collect_changed_files()
+        # The marker is disarmed rather than the line redacted...
+        self.assertNotIn("BEGIN RSA PRIVATE KEY", block)
+        self.assertIn("[pem-marker]", block)
+        # ...so the path is still recognisable AND the rest of the list survives
+        # (redacting the line instead would leave the pass armed for the rest).
+        self.assertIn("fixtures/", block)
+        self.assertIn("after.py", block)
+        # And the whole-prompt pass that runs later cannot arm on it, so the
+        # instruction half of the prompt survives.
+        rendered = block + "\n\n## Your job\nRun `codex review \"...\"`.\n"
+        filtered = self.engine._filter_credentials(rendered)
+        self.assertIn("## Your job", filtered)
+        self.assertIn("after.py", filtered)
+
+    def test_unicode_line_separators_in_path_cannot_forge_list_lines(self):
+        """The scrub must cover every separator `str.splitlines()` honours.
+
+        `\\x85`, `\\u2028` and `\\u2029` are all ABOVE 0x20, so the obvious
+        `ch < " "` predicate passes them through — while `_filter_credentials`,
+        the very next stage, is `splitlines()`-based and does treat them as line
+        breaks. One changed-file record then renders as several apparent list
+        lines, one of which can name a file the repository does not contain.
+        `str.isprintable()` is the predicate that matches what splitlines() does.
+        """
+        for name, sep in (("NEL", "\x85"), ("LS", "\u2028"), ("PS", "\u2029")):
+            with self.subTest(separator=name):
+                forged = f" M notes{sep}- ../../../../etc/shadow\0 M real.py\0"
+                with self._fake_git(forged):
+                    out = self.engine._collect_changed_files()
+                self.assertEqual(self._path_lines(out), 2, out)
+                # The separator is gone, so the injected text stays on the same
+                # rendered line as the path that carried it...
+                self.assertNotIn(sep, out)
+                # ...and the downstream filter agrees with the naive split about
+                # how many lines the block has. That agreement is the invariant:
+                # disagreement is exactly how a phantom entry appears.
+                self.assertEqual(len(out.splitlines()), len(out.split("\n")), out)
+                self.assertIn("real.py", out)
+
+    def test_obfuscated_pem_marker_is_still_disarmed(self):
+        """Pins the scrub-BEFORE-disarm order inside `_sanitize_prompt_scalar`.
+
+        The order is a security invariant, not a style choice. `_PEM_BEGIN_RE`
+        wants a literal space (`[A-Z ]*`), so `-----BEGIN<NBSP>RSA PRIVATE
+        KEY-----` matches nothing; the scrub folds that NBSP to a space. Run
+        scrub first and the disarm then neutralizes the normalized marker. Run
+        disarm first and it finds nothing — and the scrub goes on to MANUFACTURE
+        a live marker in the output, rearming the stateful credential pass and
+        reopening the SC-15 failure with an input that reads as an ordinary
+        obfuscation attempt.
+
+        The pre-existing PEM test uses a plain-ASCII marker, and the separator
+        test uses a path with no marker; neither combines the two, which is
+        exactly why swapping the two lines passed the whole suite.
+        """
+        for label, obfuscator in (("NBSP", "\u00a0"),
+                                  ("soft-hyphen", "\u00ad"),
+                                  ("ZWJ", "\u200d")):
+            with self.subTest(obfuscator=label):
+                path = f"fixtures/-----BEGIN{obfuscator}RSA PRIVATE KEY-----.pem"
+                with self._fake_git(f" M {path}\0 M after.py\0"):
+                    block = self.engine._collect_changed_files()
+                # No live marker may survive into the block, in EITHER the
+                # obfuscated or the normalized spelling.
+                self.assertNotIn("BEGIN RSA PRIVATE KEY", block)
+                self.assertNotIn(f"BEGIN{obfuscator}RSA", block)
+                self.assertIn("[pem-marker]", block)
+                # And the whole-prompt pass that runs later must not arm on it.
+                rendered = block + "\n\n## Your job\nRun the review.\n"
+                self.assertIn("## Your job",
+                              self.engine._filter_credentials(rendered))
+                self.assertIn("after.py", block)
+
+    def test_porcelain_status_code_is_carried(self):
+        """The XY code distinguishes untracked from modified from deleted —
+        useful signal for a reviewer, and cheap to carry."""
+        with self._fake_git("?? added.py\0"):
+            out = self.engine._collect_changed_files()
+        self.assertIn("??", out)
+
+
+class CodeReviewProviderTemplatesTest(TestCase):
+    """The two shipped code-review templates (SC-2).
+
+    `code_review` was the last phase carrying an inline prompt; its
+    `template_subpath` was declared in the registry but unused.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        providers = PROJECT_ROOT / "plugin" / "protocol-configs" / "providers"
+        cls.codex = (providers / "codex-code-review.md")
+        cls.agy = (providers / "agy-code-review.md")
+
+    def test_both_templates_ship(self):
+        self.assertTrue(self.codex.exists(), self.codex)
+        self.assertTrue(self.agy.exists(), self.agy)
+
+    def test_shipped_review_templates_carry_no_uncommitted_flag(self):
+        """`codex review --uncommitted "<prompt>"` exits 2 — the CLI refuses to
+        combine any scope flag with a prompt, so the wrapper silently drops the
+        prompt. The scope must be stated in words instead."""
+        from ai_providers import _CODEX_REVIEW_SCOPE_FLAGS
+        for path in (self.codex, self.agy):
+            text = path.read_text(encoding="utf-8")
+            for flag in _CODEX_REVIEW_SCOPE_FLAGS:
+                self.assertNotIn(flag, text, f"{path.name} carries {flag}")
+
+    def test_codex_template_names_the_review_subcommand(self):
+        self.assertIn("codex review", self.codex.read_text(encoding="utf-8"))
+
+    def test_agy_template_carries_no_permission_or_sandbox_flag(self):
+        """Both flags are forbidden in the shipped template: --sandbox breaks git on
+        macOS, --dangerously-skip-permissions is security-monitor-blocked and made
+        redundant by the settings.json permission rules."""
+        text = self.agy.read_text(encoding="utf-8")
+        self.assertNotIn("--dangerously-skip-permissions", text)
+        self.assertNotIn("--sandbox", text)
+
+    def test_both_templates_consume_changed_files(self):
+        for path in (self.codex, self.agy):
+            self.assertIn("{changed_files}", path.read_text(encoding="utf-8"), path)
+
+
+class ChangedFilesWiringTest(TestCase):
+    """SC-5: the git call is confined to the code_review phase.
+
+    `_resolve_ai_providers_via_registry` builds context vars and loads templates
+    BEFORE `_resolve_ai_providers` reads the `include_in_*` gate, so an
+    unconditional collection would run on every phase even when providers are
+    disabled for it. The `needs_changed_files` registry flag is the gate.
+    """
+
+    def setUp(self):
+        self.temp_dir = Path(tempfile.mkdtemp())
+        from protocol_engine import ProtocolEngine
+        self.engine = ProtocolEngine(self.temp_dir)
+
+    def tearDown(self):
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_only_code_review_declares_needs_changed_files(self):
+        from protocol_engine import _PHASE_REGISTRY
+        flagged = {k for k, e in _PHASE_REGISTRY.items() if e["needs_changed_files"]}
+        self.assertEqual(flagged, {"code_review"})
+
+    def test_context_vars_skip_git_when_flag_false(self):
+        with patch("ai_providers.subprocess.run") as run:
+            ctx = self.engine._build_provider_context_vars("task investigation")
+        run.assert_not_called()
+        self.assertEqual(ctx["changed_files"], "")
+
+    def test_context_vars_collect_when_flag_true(self):
+        with patch.object(type(self.engine), "_collect_changed_files",
+                          return_value="SENTINEL") as collect:
+            ctx = self.engine._build_provider_context_vars(
+                "code review", needs_changed_files=True)
+        collect.assert_called_once()
+        self.assertEqual(ctx["changed_files"], "SENTINEL")
+
+    def test_scalar_context_vars_are_sanitized_like_the_path_list(self):
+        """The identity scalars sit ABOVE `plan_summary` in every template.
+
+        Disarming only `changed_files` left a narrower hole one variable to the
+        left: a PEM-shaped task name arms the credential filter on template line
+        3, so everything below it — the fenced task body, the job section, the
+        invocation instruction — is redacted and the provider silently reviews to
+        its own default. Self-inflicted rather than attacker-supplied (task names
+        are user/LLM-authored), which is why it is a residual and not a Critical;
+        closed anyway because the fix is the same one line the paths already use.
+        """
+        hostile = "m-fix------BEGIN RSA PRIVATE KEY-----"
+        # A real task file at the hostile path, so `task_file_path` is populated
+        # and its sanitization is pinned too \u2014 asserting only task_name/branch
+        # left a third of the fix resting on reading rather than on a test.
+        tasks = self.temp_dir / "team-management" / "tasks"
+        tasks.mkdir(parents=True, exist_ok=True)
+        (tasks / f"{hostile}.md").write_text("# t\n", encoding="utf-8")
+        with patch("ai_providers.get_task_state",
+                   return_value={"task": hostile, "branch": "fix/a\u2028b"}):
+            ctx = self.engine._build_provider_context_vars("code review")
+        self.assertNotIn("BEGIN RSA PRIVATE KEY", ctx["task_name"])
+        self.assertIn("[pem-marker]", ctx["task_name"])
+        self.assertNotIn("\u2028", ctx["branch"])
+        self.assertNotIn("BEGIN RSA PRIVATE KEY", ctx["task_file_path"])
+        self.assertIn("[pem-marker]", ctx["task_file_path"])
+        # The rendered prompt must survive the whole-prompt filter pass.
+        rendered = (f"task `{ctx['task_name']}` on branch `{ctx['branch']}`\n"
+                    f"{ctx['plan_summary']}\n\n## Your job\nRun the review.\n")
+        self.assertIn("## Your job", self.engine._filter_credentials(rendered))
+
+
+class CodeReviewAIProviderTest(_AIProviderPhaseTestMixin, TestCase):
+    """code_review gets the same per-phase coverage as the other five.
+
+    It reaches the shared mixin only now: until its inline prompt was retired it
+    did not resolve through `_resolve_ai_providers_via_registry`.
+    """
+    PHASE_KEY = "code_review"
+
+    def test_sandbox_flag_assertion_raises_on_drift(self):
+        """Override: the inherited case writes a codex template missing
+        `-s read-only`, which is the correct drift signal for an `exec` phase
+        but not for this one — `codex review` carries its own sandbox and the
+        flag is neither required nor accepted. The review-phase equivalent of
+        that drift is a template that reintroduces `--uncommitted`, which the
+        CLI refuses to combine with a prompt.
+        """
+        from protocol_engine import _PHASE_REGISTRY
+        entry = _PHASE_REGISTRY[self.PHASE_KEY]
+        custom_path = (self.temp_dir / "team-management" / "protocol-configs"
+                       / "custom" / "providers" / f"codex-{entry['template_subpath']}.md")
+        custom_path.write_text(
+            "Run `codex review --uncommitted` and focus on bugs.",
+            encoding="utf-8",
+        )
+        self._write_config(enabled_providers=["codex"], agy_enabled=False)
+        with self.assertRaises(ValueError):
+            self._pre_func()
+
+    def test_review_template_without_read_only_flag_is_accepted(self):
+        """The exec-phase requirement must NOT leak into the review phase."""
+        from protocol_engine import _PHASE_REGISTRY
+        entry = _PHASE_REGISTRY[self.PHASE_KEY]
+        custom_path = (self.temp_dir / "team-management" / "protocol-configs"
+                       / "custom" / "providers" / f"codex-{entry['template_subpath']}.md")
+        custom_path.write_text(
+            'Run `codex review "review the uncommitted changes"`.',
+            encoding="utf-8",
+        )
+        self._write_config(enabled_providers=["codex"], agy_enabled=False)
+        result = self._pre_func()
+        self.assertEqual(result["providers"], ["codex"])
+
+    def test_task_body_mentioning_the_flag_does_not_block_dispatch(self):
+        """The flag check validates the TEMPLATE, not the rendered prompt.
+
+        The rendered prompt carries `{plan_summary}` — the task body. A task
+        ABOUT this very defect names `--uncommitted` and `--sandbox` many times;
+        checking the rendered string would make such a task undispatchable, and
+        would equally let a task mentioning `-s read-only` satisfy a check its
+        template failed. Both directions are task content, not template facts.
+        """
+        task_file = self.temp_dir / "team-management" / "tasks" / f"{self.TASK_NAME}.md"
+        task_file.write_text(
+            "---\nstatus: in-progress\n---\n\n"
+            "# Fix the review invocation\n\n"
+            "`codex review --uncommitted` drops the prompt, and agy must not "
+            "carry `--sandbox` either.\n",
+            encoding="utf-8",
+        )
+        self._write_config()
+        result = self._pre_func()
+        self.assertEqual(result["providers"], ["codex", "agy"])
+        self.assertIn("--uncommitted", result["instructions"])
+
+    def test_disabled_provider_template_cannot_block_an_enabled_sibling(self):
+        """The flag check must use the same dual gate as dispatch.
+
+        Membership in `enabled_providers` is only half of it — dispatch also
+        requires `<provider>.enabled`. Checking bare membership let a provider
+        that is listed but switched OFF raise on its own stale template and take
+        down a sibling that IS enabled.
+        """
+        from protocol_engine import _PHASE_REGISTRY
+        entry = _PHASE_REGISTRY[self.PHASE_KEY]
+        custom = (self.temp_dir / "team-management" / "protocol-configs"
+                  / "custom" / "providers" / f"codex-{entry['template_subpath']}.md")
+        custom.write_text("Run `codex review --uncommitted`.", encoding="utf-8")
+        self._write_config(enabled_providers=["codex", "agy"],
+                           codex_enabled=False, agy_enabled=True)
+
+        result = self._pre_func()
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["providers"], ["agy"])
+
+    def test_non_utf8_custom_template_falls_through(self):
+        """A corrupt custom override must degrade, not abort the step.
+
+        `_read_provider_template` catches `(IOError, OSError)`; a non-UTF-8 file
+        raises `UnicodeDecodeError`, which is a `ValueError` and escaped both —
+        aborting the protocol step, contrary to the graceful-degradation
+        contract the function's own docstring states. Newly reachable for this
+        phase: a hand-written `codex-code-review.md` had no effect at all until
+        code_review became template-driven.
+        """
+        from protocol_engine import _PHASE_REGISTRY
+        entry = _PHASE_REGISTRY[self.PHASE_KEY]
+        custom_path = (self.temp_dir / "team-management" / "protocol-configs"
+                       / "custom" / "providers" / f"codex-{entry['template_subpath']}.md")
+        custom_path.write_bytes(b"\xff\xfe not valid utf-8 \xff")
+        self._write_config(enabled_providers=["codex"], agy_enabled=False)
+
+        result = self._pre_func()
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["providers"], ["codex"])
+
+    def test_changed_files_substitutes_rather_than_placeholding(self):
+        """`<list>` used to reach codex verbatim — nothing substituted it."""
+        with patch.object(type(self.engine), "_collect_changed_files",
+                          return_value="- src/x.py  [ M]"):
+            self._write_config()
+            result = self._pre_func()
+        self.assertIn("src/x.py", result["instructions"])
+        self.assertNotIn("{changed_files}", result["instructions"])
 
 
 class BrainstormAIProviderTest(_AIProviderPhaseTestMixin, TestCase):

@@ -12,6 +12,9 @@ Hard invariants (exit 1, GitHub `::error::`):
   - plugin.json has non-empty `name` and `version`.
   - marketplace.json `plugins[0].source` resolves to the directory holding plugin.json.
   - SECURITY.md lists the plugin's MAJOR.MINOR series (e.g. `0.4.x`) as supported.
+  - plugin/CHANGELOG.md has a `## [<version>]` section for the plugin version
+    (the session-start update notice shows exactly that section — a release
+    without one would update users silently).
 
 Soft convention (exit 0, GitHub `::warning::`):
   - marketplace.json `metadata.version` differs from the plugin version. The
@@ -30,6 +33,7 @@ ROOT = Path(__file__).resolve().parents[2]  # .github/scripts/ -> repo root
 PLUGIN_JSON = ROOT / "plugin" / ".claude-plugin" / "plugin.json"
 MARKETPLACE_JSON = ROOT / ".claude-plugin" / "marketplace.json"
 SECURITY_MD = ROOT / "SECURITY.md"
+CHANGELOG_MD = ROOT / "plugin" / "CHANGELOG.md"
 
 errors: list[str] = []
 warnings: list[str] = []
@@ -113,6 +117,23 @@ if version:
             errors.append(
                 f"{_rel(SECURITY_MD)}: no supported-versions row covering '{series}'. "
                 f"Add one when bumping to a new minor/major series."
+            )
+
+if version:
+    # The session-start update notice shows the `## [<version>]` section of the
+    # shipped changelog — a release without one updates users silently.
+    try:
+        changelog = CHANGELOG_MD.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        errors.append(f"{_rel(CHANGELOG_MD)}: file not found")
+    else:
+        heading = re.compile(
+            r"^##\s*\[" + re.escape(str(version)) + r"\]", re.MULTILINE
+        )
+        if not heading.search(changelog):
+            errors.append(
+                f"{_rel(CHANGELOG_MD)}: no '## [{version}]' section for the "
+                f"plugin version. Document the release before shipping it."
             )
 
 for warning in warnings:

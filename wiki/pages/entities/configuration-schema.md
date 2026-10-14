@@ -2,7 +2,7 @@
 title: Configuration Schema
 tags: [config, installer, ai-providers]
 created: 2026-05-31
-updated: 2026-07-12
+updated: 2026-10-13
 sources: [plugin/templates/config.template.json, plugin/mcp/core/config.py, plugin/mcp/tools/config.py, plugin/hooks/protocol_engine.py, plugin/hooks/session-start.py, plugin/hooks/shared_state.py, plugin/hooks/notification_utils.py, plugin/mcp/tools/notifications.py, plugin/commands/config.md, plugin/templates/statusline.py]
 ---
 
@@ -51,14 +51,18 @@ Provider blocks (each gated by its own `enabled` flag; all default `false` in th
 ### AI providers
 - `ai_providers.enabled_providers` — list of active providers, e.g. `["codex", "agy"]`. Empty by default.
 - Six per-phase flags, each `true` in the template: `include_in_code_review`, `include_in_brainstorm`, `include_in_investigation`, `include_in_implementation`, `include_in_research_exploration`, `include_in_refactoring_planning`. Each maps to one phase in `_PHASE_REGISTRY` (`ai_providers.py`, re-exported into `protocol_engine.py`) and gates whether that phase dispatches provider Task agents.
-- `ai_providers.timeout` — currently **inert** (default `300`): not read by the wrappers, which enforce a fixed deadline (codex 300s, agy 330s watchdog). `config_update` still validates it as an integer (`config.py`); the key is kept for a future plumbing task.
+- `ai_providers.timeout` — currently **inert** (default `300`): not read by the wrappers, which enforce a fixed deadline (codex 300s, agy 510s watchdog). `config_update` still validates it as an integer (`config.py`); the key is kept for a future plumbing task.
 - `codex.enabled`, `agy.enabled` — per-CLI master switches; both `false` in the template.
 
 A provider participates in a phase only when it is in `enabled_providers` **and** the phase's `include_in_*` flag is true **and** its `<provider>.enabled` is true. See [AI Provider Integration](pages/subsystems/ai-provider-integration.md).
 
 ### Code review and the optional test gate
 - `code_review.enforce_warnings` — when `true`, code-review warnings must be acknowledged before completion (default `false`). Read via the `config_code_review_enforcement` MCP tool.
+- `code_review.testing_specialist_enabled` / `code_review.red_team_enabled` / `code_review.cleanliness_enabled` — gates for the classifier-dispatched review-chain specialists (all default `true`; absent key = enabled; only exact JSON `false` disables). Read by `_read_review_dispatch_config` in `protocol_engine.py` (the `classify_review_dispatch` pre_func) — see [Review Dispatch Gate](pages/entities/review-dispatch-gate.md). Fail-enabled by design: config trouble never silently disables the roster.
 - `test_command` — optional runner for the `verify_tests_pass` gate on the `code-review` step. Default `null`. Detailed below.
+
+### Safety guards
+- `safety_guards.enabled` — the destructive-Bash-command guard in `sessions-enforce.py` (default `true` — deliberately default-on; a friction UX toggle, not a security control). `safety_guards.sensitivity` — `off` (≡ `enabled: false`) / `warn-destructive-only` (default) / `warn-all` (adds every `BASH_WRITE_PATTERNS` match and disables the own-branch exception). `safety_guards.allowlist` — extra exact whole-command strings that always pass. Malformed values degrade to the defaults (fail-enabled, mirroring the review-chain gates). Read by `check_safety_guard in sessions-enforce.py` — see [Safety Guards](pages/entities/safety-guards.md).
 
 ### Notifications
 - `notifications`: `enabled` (default `false`), `mode` (`per_step` / `off`; missing key defaults to `per_step`), `prefix`, and `channels.telegram` (`enabled`, `bot_token`, `chat_id`, `ca_bundle`). `off` silences per-step pings but still delivers the protocol-completion ping.
